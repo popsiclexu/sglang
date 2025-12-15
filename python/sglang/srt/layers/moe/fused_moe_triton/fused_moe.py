@@ -13,14 +13,17 @@ import torch
 import torch.nn.functional as F
 import triton.language as tl
 
+from sglang.srt.environ import envs
 from sglang.srt.layers.moe.moe_runner import MoeRunnerConfig
 from sglang.srt.utils import (
     cpu_has_amx_support,
     direct_register_custom_op,
     get_bool_env_var,
+    get_compiler_backend,
     is_cpu,
     is_cuda,
     is_hip,
+    is_musa,
 )
 
 from .fused_moe_triton_config import get_config_dtype_str, try_get_optimal_moe_config
@@ -39,6 +42,8 @@ _is_cuda = is_cuda()
 _is_cpu_amx_available = cpu_has_amx_support()
 _is_cpu = is_cpu()
 _use_aiter = get_bool_env_var("SGLANG_USE_AITER") and _is_hip
+_is_musa = is_musa()
+_use_musa_fused_kernel = envs.SGLANG_USE_MUSA_FUSED_KERNEL.get() and _is_musa
 
 if _is_cuda:
     from sgl_kernel import gelu_and_mul, moe_sum_reduce, silu_and_mul
@@ -54,6 +59,9 @@ elif _is_hip:
             raise ImportError("aiter is required when SGLANG_USE_AITER is set to True")
     else:
         from vllm import _custom_ops as vllm_ops
+elif _is_musa:
+    from sgl_kernel import moe_sum_reduce, musa_fused_moe_gemv, silu_and_mul
+    from vllm import _custom_ops as vllm_ops
 
 padding_size = 128 if bool(int(os.getenv("SGLANG_MOE_PADDING", "0"))) else 0
 
@@ -347,7 +355,7 @@ def fused_experts(
         )
 
 
-@torch.compile
+@torch.compile(backend=get_compiler_backend())
 def moe_sum_reduce_torch_compile(x, out, routed_scaling_factor):
     torch.sum(x, dim=1, out=out)
     out.mul_(routed_scaling_factor)
@@ -514,108 +522,144 @@ def fused_experts_impl(
         curr_topk_ids = topk_ids[begin_chunk_idx:end_chunk_idx]
         curr_topk_weights = topk_weights[begin_chunk_idx:end_chunk_idx]
 
-        sorted_token_ids, expert_ids, num_tokens_post_padded = moe_align_block_size(
-            curr_topk_ids, config["BLOCK_SIZE_M"], E
-        )
-
-        invoke_fused_moe_kernel(
-            curr_hidden_states,
-            w1,
-            b1,
-            intermediate_cache1,
-            a1_scale,
-            w1_scale,
-            w1_zp,
-            curr_topk_weights,
-            curr_topk_ids,
-            sorted_token_ids,
-            expert_ids,
-            num_tokens_post_padded,
-            apply_router_weight_on_input,
-            topk_ids.shape[1],
-            config,
-            compute_type=compute_type,
-            use_fp8_w8a8=use_fp8_w8a8,
-            use_int8_w8a8=use_int8_w8a8,
-            use_int8_w8a16=use_int8_w8a16,
-            use_int4_w4a16=use_int4_w4a16,
-            per_channel_quant=per_channel_quant,
-            block_shape=block_shape,
-            c_sorted=down_moe_use_tma,
-            filter_expert=filter_expert,
-        )
-        # Activation function with multiplication
-        if activation == "silu" and is_gated:
-            if gemm1_alpha is not None:
-                assert gemm1_limit is not None
-                intermediate_cache2 = swiglu_with_alpha_and_limit(
-                    intermediate_cache1.view(-1, N),
-                    gemm1_alpha,
-                    gemm1_limit,
-                )
-            elif _is_cuda or _is_hip:
-                silu_and_mul(intermediate_cache1.view(-1, N), intermediate_cache2)
-            else:
-                vllm_ops.silu_and_mul(
-                    intermediate_cache2, intermediate_cache1.view(-1, N)
-                )
-        elif activation == "gelu" and is_gated:
-            assert gemm1_alpha is None, "gemm1_alpha is not supported for gelu"
-            assert gemm1_limit is None, "gemm1_limit is not supported for gelu"
-            if _is_cuda or _is_hip:
-                gelu_and_mul(intermediate_cache1.view(-1, N), intermediate_cache2)
-            else:
-                vllm_ops.gelu_and_mul(
-                    intermediate_cache2, intermediate_cache1.view(-1, N)
-                )
-        # Activation function without multiplication
-        elif activation == "silu" and not is_gated:
-            intermediate_cache2 = F.silu(intermediate_cache1.view(-1, N))
-        elif activation == "gelu" and not is_gated:
-            intermediate_cache2 = F.gelu(intermediate_cache1.view(-1, N))
-        elif activation == "relu2" and not is_gated:
-            intermediate_cache2 = torch.square(F.relu(intermediate_cache1.view(-1, N)))
+        if _use_musa_fused_kernel:
+            musa_fused_moe_gemv(
+                curr_hidden_states,
+                w1,
+                intermediate_cache2,
+                None,
+                w1_scale,
+                curr_topk_weights,
+                curr_topk_ids,
+                apply_router_weight_on_input,
+                topk_ids.shape[1],
+                use_int4_w4a16,
+                use_swigelu=True,
+            )
+            musa_fused_moe_gemv(
+                intermediate_cache2,
+                w2,
+                intermediate_cache3,
+                None,
+                w2_scale,
+                curr_topk_weights,
+                curr_topk_ids,
+                not apply_router_weight_on_input,
+                1,
+                use_int4_w4a16,
+                use_swigelu=False,
+            )
         else:
-            raise ValueError(f"Unsupported activation: {activation=}, with {is_gated=}")
+            sorted_token_ids, expert_ids, num_tokens_post_padded = moe_align_block_size(
+                curr_topk_ids, config["BLOCK_SIZE_M"], E
+            )
 
-        invoke_fused_moe_kernel(
-            intermediate_cache2,
-            w2,
-            b2,
-            (
-                intermediate_cache3
-                if not no_combine and topk_ids.shape[1] != 1
-                else out_hidden_states[begin_chunk_idx:end_chunk_idx].unsqueeze(0)
-            ),
-            a2_scale,
-            w2_scale,
-            w2_zp,
-            curr_topk_weights,
-            curr_topk_ids,
-            sorted_token_ids,
-            expert_ids,
-            num_tokens_post_padded,
-            not apply_router_weight_on_input,
-            1,
-            down_config or config,
-            compute_type=compute_type,
-            use_fp8_w8a8=use_fp8_w8a8,
-            use_int8_w8a8=use_int8_w8a8,
-            use_int8_w8a16=use_int8_w8a16,
-            use_int4_w4a16=use_int4_w4a16,
-            per_channel_quant=per_channel_quant,
-            block_shape=block_shape,
-            a_use_tma=down_moe_use_tma,
-            b_use_tma=down_moe_use_tma,
-            filter_expert=filter_expert,
-        )
+            invoke_fused_moe_kernel(
+                curr_hidden_states,
+                w1,
+                b1,
+                intermediate_cache1,
+                a1_scale,
+                w1_scale,
+                w1_zp,
+                curr_topk_weights,
+                curr_topk_ids,
+                sorted_token_ids,
+                expert_ids,
+                num_tokens_post_padded,
+                apply_router_weight_on_input,
+                topk_ids.shape[1],
+                config,
+                compute_type=compute_type,
+                use_fp8_w8a8=use_fp8_w8a8,
+                use_int8_w8a8=use_int8_w8a8,
+                use_int8_w8a16=use_int8_w8a16,
+                use_int4_w4a16=use_int4_w4a16,
+                per_channel_quant=per_channel_quant,
+                block_shape=block_shape,
+                c_sorted=down_moe_use_tma,
+                filter_expert=filter_expert,
+            )
+            # Activation function with multiplication
+            if activation == "silu" and is_gated:
+                if gemm1_alpha is not None:
+                    assert gemm1_limit is not None
+                    intermediate_cache2 = swiglu_with_alpha_and_limit(
+                        intermediate_cache1.view(-1, N),
+                        gemm1_alpha,
+                        gemm1_limit,
+                    )
+                elif _is_cuda or _is_hip:
+                    silu_and_mul(intermediate_cache1.view(-1, N), intermediate_cache2)
+                elif is_musa:
+                    intermediate_cache2 = torch.nn.SwishGLU()(
+                        intermediate_cache1.view(-1, N)
+                    )
+                else:
+                    vllm_ops.silu_and_mul(
+                        intermediate_cache2, intermediate_cache1.view(-1, N)
+                    )
+            elif activation == "gelu" and is_gated:
+                assert gemm1_alpha is None, "gemm1_alpha is not supported for gelu"
+                assert gemm1_limit is None, "gemm1_limit is not supported for gelu"
+                if _is_cuda or _is_hip or _is_musa:
+                    gelu_and_mul(intermediate_cache1.view(-1, N), intermediate_cache2)
+                else:
+                    vllm_ops.gelu_and_mul(
+                        intermediate_cache2, intermediate_cache1.view(-1, N)
+                    )
+            # Activation function without multiplication
+            elif activation == "silu" and not is_gated:
+                intermediate_cache2 = F.silu(intermediate_cache1.view(-1, N))
+            elif activation == "gelu" and not is_gated:
+                intermediate_cache2 = F.gelu(intermediate_cache1.view(-1, N))
+            elif activation == "relu2" and not is_gated:
+                intermediate_cache2 = torch.square(
+                    F.relu(intermediate_cache1.view(-1, N))
+                )
+            else:
+                raise ValueError(
+                    f"Unsupported activation: {activation=}, with {is_gated=}"
+                )
+
+            invoke_fused_moe_kernel(
+                intermediate_cache2,
+                w2,
+                b2,
+                (
+                    intermediate_cache3
+                    if not no_combine and topk_ids.shape[1] != 1
+                    else out_hidden_states[begin_chunk_idx:end_chunk_idx].unsqueeze(0)
+                ),
+                a2_scale,
+                w2_scale,
+                w2_zp,
+                curr_topk_weights,
+                curr_topk_ids,
+                sorted_token_ids,
+                expert_ids,
+                num_tokens_post_padded,
+                not apply_router_weight_on_input,
+                1,
+                down_config or config,
+                compute_type=compute_type,
+                use_fp8_w8a8=use_fp8_w8a8,
+                use_int8_w8a8=use_int8_w8a8,
+                use_int8_w8a16=use_int8_w8a16,
+                use_int4_w4a16=use_int4_w4a16,
+                per_channel_quant=per_channel_quant,
+                block_shape=block_shape,
+                a_use_tma=down_moe_use_tma,
+                b_use_tma=down_moe_use_tma,
+                filter_expert=filter_expert,
+            )
 
         if routed_scaling_factor is None:
             routed_scaling_factor = 1.0
 
         if no_combine:
             pass
-        elif _is_cuda:
+        elif _is_cuda or _is_musa:
             if topk_ids.shape[1] == 1 and routed_scaling_factor == 1.0:
                 pass  # we write directly into out_hidden_states
             elif topk_ids.shape[1] == 2 and routed_scaling_factor == 1.0:

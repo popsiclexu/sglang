@@ -47,6 +47,7 @@ from sglang.srt.utils.common import (
     is_flashinfer_available,
     is_hip,
     is_hopper_with_cuda_12_3,
+    is_musa,
     is_no_spec_infer_or_topk_one,
     is_npu,
     is_port_available,
@@ -1442,6 +1443,12 @@ class ServerArgs:
             )
             self.page_size = 128
 
+        if is_musa() and self.attention_backend == "fa3":
+            logger.warning(
+                "FA3 attention backend on MUSA only supports a page_size of 64, change page_size to 64."
+            )
+            self.page_size = 64
+
         if (
             self.attention_backend == "trtllm_mla"
             or self.decode_attention_backend == "trtllm_mla"
@@ -2484,7 +2491,7 @@ class ServerArgs:
             "--device",
             type=str,
             default=ServerArgs.device,
-            help="The device to use ('cuda', 'xpu', 'hpu', 'npu', 'cpu'). Defaults to auto-detection if not specified.",
+            help="The device to use ('cuda', 'xpu', 'hpu', 'npu', 'cpu', 'musa'). Defaults to auto-detection if not specified.",
         )
         parser.add_argument(
             "--tensor-parallel-size",

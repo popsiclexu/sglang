@@ -1,14 +1,17 @@
 import logging
 
 from sglang.srt.environ import envs
-from sglang.srt.utils import get_device_sm, is_blackwell
+from sglang.srt.utils import get_device_sm, get_int_env_var, is_blackwell, is_musa
 
 logger = logging.getLogger(__name__)
 
 
 def _compute_enable_deep_gemm():
     sm_version = get_device_sm()
-    if sm_version < 90:
+    if is_musa():
+        if sm_version < 31:
+            return False
+    elif sm_version < 90:
         return False
 
     try:
@@ -19,7 +22,12 @@ def _compute_enable_deep_gemm():
     return envs.SGLANG_ENABLE_JIT_DEEPGEMM.get()
 
 
+def _get_deep_gemm_block_m() -> int:
+    return get_int_env_var("SGL_DEEP_GEMM_BLOCK_M", default=128)
+
+
 ENABLE_JIT_DEEPGEMM = _compute_enable_deep_gemm()
 
 DEEPGEMM_BLACKWELL = ENABLE_JIT_DEEPGEMM and is_blackwell()
 DEEPGEMM_SCALE_UE8M0 = DEEPGEMM_BLACKWELL
+DEEPGEMM_BLOCK_M = _get_deep_gemm_block_m()

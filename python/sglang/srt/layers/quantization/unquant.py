@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 
 from sglang.srt.custom_op import CustomOp
+from sglang.srt.environ import envs
 from sglang.srt.layers.amx_utils import _amx_process_weight_after_loading
 from sglang.srt.layers.moe import (
     MoeRunner,
@@ -25,6 +26,7 @@ from sglang.srt.utils import (
     get_bool_env_var,
     is_cpu,
     is_hip,
+    is_musa,
     next_power_of_2,
     set_weight_attrs,
     use_intel_amx_backend,
@@ -41,11 +43,16 @@ _is_cpu_amx_available = cpu_has_amx_support()
 _is_hip = is_hip()
 _is_cpu = is_cpu()
 _use_aiter = get_bool_env_var("SGLANG_USE_AITER") and _is_hip
+_is_musa = is_musa()
+_use_musa_fused_kernel = envs.SGLANG_USE_MUSA_FUSED_KERNEL.get() and _is_musa
 
 if _use_aiter:
     from aiter import ActivationType
     from aiter.fused_moe import fused_moe
     from aiter.ops.shuffle import shuffle_weight
+
+if _is_musa:
+    from sgl_kernel import musa_fused_gemv
 
 try:
     from flashinfer.fused_moe import cutlass_fused_moe as flashinfer_cutlass_fused_moe
@@ -85,6 +92,14 @@ class UnquantizedEmbeddingMethod(QuantizeMethodBase):
         x: torch.Tensor,
         bias: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
+        if (
+            _use_musa_fused_kernel
+            and torch.cuda.get_device_capability() >= (3, 1)
+            and bias is None
+            and x.shape[0] < 3
+            and x.dim() == 2  # XXX (MUSA): fused_gemv - A must be dim 2
+        ):
+            return musa_fused_gemv(x, layer.weight)
         return F.linear(x, layer.weight, bias)
 
     def embedding(self, layer: torch.nn.Module, input_: torch.Tensor) -> torch.Tensor:
@@ -139,6 +154,15 @@ class UnquantizedLinearMethod(LinearMethodBase):
             if len(x_shapes) == 3:
                 output = output.view(x_shapes[0], x_shapes[1], -1)
             return output
+
+        if (
+            _use_musa_fused_kernel
+            and torch.cuda.get_device_capability() >= (3, 1)
+            and bias is None
+            and x.shape[0] < 3
+            and x.dim() == 2  # XXX (MUSA): fused_gemv - A must be dim 2
+        ):
+            return musa_fused_gemv(x, layer.weight)
 
         return F.linear(x, layer.weight, bias)
 
@@ -412,10 +436,12 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, CustomOp):
             .contiguous()
         )
 
-        hidden_states, expanded_row_idx, expanded_expert_idx = (
-            torch_npu.npu_moe_init_routing(
-                x, row_idx=row_idx, expert_idx=topk_ids, active_num=num_tokens
-            )
+        (
+            hidden_states,
+            expanded_row_idx,
+            expanded_expert_idx,
+        ) = torch_npu.npu_moe_init_routing(
+            x, row_idx=row_idx, expert_idx=topk_ids, active_num=num_tokens
         )
 
         expert_tokens = torch_npu.npu_moe_compute_expert_tokens(

@@ -80,7 +80,6 @@ class ReqToTokenPool:
         device: str,
         enable_memory_saver: bool,
     ):
-
         memory_saver_adapter = TorchMemorySaverAdapter.create(
             enable=enable_memory_saver
         )
@@ -520,7 +519,6 @@ class KVCache(abc.ABC):
 
 
 class MHATokenToKVPool(KVCache):
-
     def __init__(
         self,
         size: int,
@@ -1276,7 +1274,6 @@ class SWAKVPool(KVCache):
         k_scale: float = 1.0,
         v_scale: float = 1.0,
     ):
-
         layer_id = layer.layer_id
         layer_id_pool, is_swa_layer = self.layers_mapping[layer_id]
         if is_swa_layer:

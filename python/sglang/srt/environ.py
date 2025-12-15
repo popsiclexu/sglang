@@ -235,6 +235,10 @@ class Envs:
     # NPU
     SGLANG_NPU_DISABLE_ACL_FORMAT_WEIGHT = EnvBool(False)
 
+    # MTHREADS & MUSA
+    SGLANG_USE_MUSA_FUSED_KERNEL = EnvBool(True)
+    SGLANG_USE_MTT = EnvBool(False)
+
     # Quantization
     SGLANG_INT4_WEIGHT = EnvBool(False)
     SGLANG_CPU_QUANTIZATION = EnvBool(False)

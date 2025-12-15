@@ -3,11 +3,14 @@ import logging
 import torch
 import triton
 
-from sglang.srt.utils import ceil_div, is_cuda
+from sglang.srt.layers import deep_gemm_wrapper
+from sglang.srt.utils import ceil_div, is_cuda, is_musa
 
 logger = logging.getLogger(__name__)
 
 _is_cuda = is_cuda()
+_is_musa = is_musa()
+
 if _is_cuda:
     from sglang.srt.layers.quantization.fp8_kernel import (
         sglang_per_token_group_quant_fp8 as per_token_group_quant_fp8,
@@ -665,6 +668,7 @@ def _fwd_kernel_ep_scatter_2(
     HIDDEN_SIZE_PAD: tl.constexpr,
     SCALE_HIDDEN_SIZE: tl.constexpr,
     SCALE_HIDDEN_SIZE_PAD: tl.constexpr,
+    ATOMIC_ADD_SEM: tl.constexpr,
 ):
     start_token_id = tl.program_id(0)
     grid_num = tl.num_programs(0)
@@ -689,7 +693,9 @@ def _fwd_kernel_ep_scatter_2(
             topk_index = topk_idx_int32.to(tl.int64)
             expert_id = tl.load(recv_topk + token_id * recv_topk_stride0 + topk_index)
             if expert_id >= 0:
-                dest_token_index_int32 = tl.atomic_add(expert_start_loc + expert_id, 1)
+                dest_token_index_int32 = tl.atomic_add(
+                    expert_start_loc + expert_id, 1, sem=ATOMIC_ADD_SEM
+                )
                 dest_token_index = dest_token_index_int32.to(tl.int64)
 
                 tl.store(
@@ -724,7 +730,9 @@ def ep_scatter(
     output_index: torch.Tensor,
     scale_ue8m0: bool = False,
 ):
-    BLOCK_E = 128  # token num of per expert is aligned to 128
+    BLOCK_E = (
+        deep_gemm_wrapper.DEEPGEMM_BLOCK_M
+    )  # token num of per expert is aligned to 128
     BLOCK_D = 128  # block size of quantization
     num_warps = 8
     num_experts = num_recv_tokens_per_expert.shape[0]
@@ -783,6 +791,7 @@ def ep_scatter(
         HIDDEN_SIZE_PAD=triton.next_power_of_2(hidden_size),
         SCALE_HIDDEN_SIZE=scale_hidden_size,
         SCALE_HIDDEN_SIZE_PAD=triton.next_power_of_2(scale_hidden_size),
+        ATOMIC_ADD_SEM=None if not _is_musa else "relaxed",
     )
     return
 

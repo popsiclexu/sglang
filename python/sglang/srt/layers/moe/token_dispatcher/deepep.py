@@ -27,6 +27,7 @@ from sglang.srt.layers.moe.utils import (
 )
 from sglang.srt.utils import (
     get_bool_env_var,
+    get_device,
     is_blackwell,
     is_hip,
     is_npu,
@@ -34,6 +35,7 @@ from sglang.srt.utils import (
 )
 
 _is_npu = is_npu()
+
 
 if TYPE_CHECKING:
     from sglang.srt.batch_overlap.single_batch_overlap import CombineOverlapArgs
@@ -205,7 +207,7 @@ class DeepEPBuffer:
 
         if not _is_npu:
             total_num_sms = torch.cuda.get_device_properties(
-                device="cuda"
+                device=get_device()
             ).multi_processor_count
             if (
                 (deepep_mode != DeepEPMode.LOW_LATENCY)
@@ -466,7 +468,11 @@ class _DeepEPDispatcherImplNormal(_DeepEPDispatcherImplBase):
             previous_event=previous_event,
             async_finish=self.async_finish,
             allocate_on_comm_stream=(previous_event is not None) and self.async_finish,
-            expert_alignment=128 if deep_gemm_wrapper.ENABLE_JIT_DEEPGEMM else 1,
+            expert_alignment=(
+                deep_gemm_wrapper.DEEPGEMM_BLOCK_M
+                if deep_gemm_wrapper.ENABLE_JIT_DEEPGEMM
+                else 1
+            ),
             config=DeepEPConfig.get_instance().normal_dispatch_config,
         )
         get_global_expert_distribution_recorder().on_deepep_dispatch_normal(

@@ -14,14 +14,20 @@ from sglang.srt.layers.radix_attention import AttentionType
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch, ForwardMode
 from sglang.srt.server_args import get_global_server_args
 from sglang.srt.speculative.spec_info import SpecInput
-from sglang.srt.utils import get_compiler_backend
+from sglang.srt.utils import get_compiler_backend, is_musa
 
 if TYPE_CHECKING:
     from sglang.srt.layers.radix_attention import RadixAttention
     from sglang.srt.model_executor.model_runner import ModelRunner
 
 from sgl_kernel import merge_state_v2
-from sgl_kernel.flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
+
+_is_musa = is_musa()
+if _is_musa:
+    from mate import flash_attn_varlen_func
+    from mate.fused_attn_interface import flash_attn_with_kvcache
+else:
+    from sgl_kernel.flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
 
 
 @dataclass
@@ -355,6 +361,10 @@ class FlashAttentionBackend(AttentionBackend):
         self.has_swa = (
             self.sliding_window_size is not None and self.sliding_window_size > -1
         )
+        if _is_musa:
+            self.mate_workspace_buffer = torch.empty(
+                128 * 1024 * 1024, device=self.device, dtype=torch.uint8
+            )
 
         # If num_splits == 0, we use a heuristic to automatically determine the number of splits.
         # We set nums splits to 1 if deterministic inference is enabled.
@@ -950,6 +960,12 @@ class FlashAttentionBackend(AttentionBackend):
                     q_nope = q_all[:, :, : layer.v_head_dim]
                     q_rope = q_all[:, :, layer.v_head_dim :]
 
+                scheduler_metadata = (
+                    (self.mate_workspace_buffer, layer.layer_id != 0)
+                    if _is_musa
+                    else None
+                )
+
                 result = flash_attn_with_kvcache(
                     q=q_rope,
                     k_cache=k_rope_cache,
@@ -967,6 +983,7 @@ class FlashAttentionBackend(AttentionBackend):
                     v_descale=v_descale,
                     return_softmax_lse=use_cascade_attn,
                     num_splits=self.num_splits,
+                    scheduler_metadata=scheduler_metadata,
                 )
                 if use_cascade_attn:
                     o, softmax_lse, *rest = result
@@ -989,8 +1006,10 @@ class FlashAttentionBackend(AttentionBackend):
                             v_descale=v_descale,
                             return_softmax_lse=True,
                             num_splits=self.num_splits,
+                            scheduler_metadata=scheduler_metadata,
                         )
                     )
+
                     o, _ = merge_state_v2_wrapper(
                         o,
                         softmax_lse.T.contiguous(),
@@ -1221,6 +1240,10 @@ class FlashAttentionBackend(AttentionBackend):
                 q_rope = q_all[:, :, layer.v_head_dim :]
             max_seqlen_q = metadata.max_seq_len_q
 
+            scheduler_metadata = (
+                (self.mate_workspace_buffer, layer.layer_id != 0) if _is_musa else None
+            )
+
             result = flash_attn_with_kvcache(
                 q=q_rope,
                 k_cache=k_rope_cache,
@@ -1238,7 +1261,9 @@ class FlashAttentionBackend(AttentionBackend):
                 v_descale=v_descale,
                 return_softmax_lse=use_cascade_attn,  # softmax_lse is needed for merge states
                 num_splits=self.num_splits,
+                scheduler_metadata=scheduler_metadata,
             )
+
             if use_cascade_attn:
                 o, softmax_lse, *rest = result
                 o_expand, softmax_lse_expand, *rest_expand = flash_attn_with_kvcache(
@@ -1259,7 +1284,9 @@ class FlashAttentionBackend(AttentionBackend):
                     v_descale=v_descale,
                     return_softmax_lse=True,
                     num_splits=self.num_splits,
+                    scheduler_metadata=scheduler_metadata,
                 )
+
                 o, _ = merge_state_v2(
                     o,
                     softmax_lse.T.contiguous(),
@@ -1582,6 +1609,7 @@ class FlashAttentionBackend(AttentionBackend):
                     metadata.page_table = self.decode_cuda_graph_metadata[
                         "page_table_draft_decode"
                     ][:bs, :]
+
                     self.decode_cuda_graph_metadata[bs] = metadata
                 else:
                     # When top k > 1, we need two specific draft decode metadata, and then merge states
@@ -1621,6 +1649,7 @@ class FlashAttentionBackend(AttentionBackend):
                     metadata_expand.page_table = self.draft_decode_metadata_topk_expand[
                         "page_table"
                     ][: bs * self.topk]
+
                     self.draft_decode_metadata_topk_normal[bs] = metadata
                     self.draft_decode_metadata_topk_expand[bs] = metadata_expand
             else:
@@ -1642,6 +1671,7 @@ class FlashAttentionBackend(AttentionBackend):
                 metadata.cu_seqlens_q = torch.arange(
                     0, batch_size + 1, dtype=torch.int32, device=device
                 )
+
                 self.decode_cuda_graph_metadata[bs] = metadata
 
                 if self.attention_chunk_size is not None:
@@ -1798,7 +1828,6 @@ class FlashAttentionBackend(AttentionBackend):
         metadata_expand = None
 
         if forward_mode.is_decode_or_idle():
-
             if spec_info is not None:
                 # Draft Decode
                 if self.topk <= 1:
@@ -2404,7 +2433,6 @@ def prepare_swa_spec_page_table_triton(
 
 
 class FlashAttentionMultiStepBackend:
-
     def __init__(
         self, model_runner: ModelRunner, topk: int, speculative_num_steps: int
     ):
