@@ -1532,7 +1532,7 @@ class MRotaryEmbedding(RotaryEmbedding):
         """
         assert positions.ndim == 1 or positions.ndim == 2
 
-        if positions.ndim == 2 and self.mrope_section and _is_cuda:
+        if positions.ndim == 2 and self.mrope_section and (_is_cuda or _is_musa):
             return self._forward_triton(positions, query, key)
         elif _is_npu:
             return self._forward_npu(positions, query, key)
