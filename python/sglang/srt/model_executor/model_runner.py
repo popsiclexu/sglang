@@ -898,6 +898,7 @@ class ModelRunner:
         self,
         new_expert_location_metadata: ExpertLocationMetadata,
         update_layer_ids: List[int],
+        rebalance_experts_per_chunk: int,
     ):
         if ElasticEPStateManager.instance() is not None:
             # TODO: refactor the weights update when elastic ep
@@ -913,10 +914,11 @@ class ModelRunner:
                 lambda name: "mlp.experts" in name and "mlp.shared_experts" not in name,
             )
         else:
-            self.expert_location_updater.update(
+            yield from self.expert_location_updater.update(
                 self.model.routed_experts_weights_of_layer,
                 new_expert_location_metadata,
                 update_layer_ids=update_layer_ids,
+                rebalance_experts_per_chunk=rebalance_experts_per_chunk,
                 nnodes=self.server_args.nnodes,
                 rank=self.tp_rank,
             )
