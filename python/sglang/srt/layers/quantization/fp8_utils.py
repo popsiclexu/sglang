@@ -269,7 +269,10 @@ def _dispatch_auto_backend() -> Callable:
     # 4. AITER (if AMD GPU with AITER enabled)
     # 5. Triton (fallback)
 
-    if deep_gemm_wrapper.ENABLE_JIT_DEEPGEMM:
+    # XXX (MUSA): On MUSA devices DeepGEMM does not provide the FP8 GEMM NT kernel
+    if _is_musa:
+        return musa_w8a8_block_fp8_linear
+    elif deep_gemm_wrapper.ENABLE_JIT_DEEPGEMM:
         return deepgemm_w8a8_block_fp8_linear_with_fallback
     elif is_blackwell_supported() and is_flashinfer_available():
         return flashinfer_gemm_w8a8_block_fp8_linear_with_fallback
@@ -277,10 +280,6 @@ def _dispatch_auto_backend() -> Callable:
         return cutlass_w8a8_block_fp8_linear_with_fallback
     elif _use_aiter:
         return aiter_w8a8_block_fp8_linear
-    elif _is_musa:
-        return musa_w8a8_block_fp8_linear
-    elif deep_gemm_wrapper.ENABLE_JIT_DEEPGEMM:
-        return deepgemm_w8a8_block_fp8_linear_with_fallback
     else:
         return triton_w8a8_block_fp8_linear
 
