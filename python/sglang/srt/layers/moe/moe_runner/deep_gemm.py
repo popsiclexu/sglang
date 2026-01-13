@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, List, Optional
 
 import torch
+import torch.nn as nn
 
 from sglang.srt.layers import deep_gemm_wrapper
 from sglang.srt.layers.moe.moe_runner.base import (
@@ -185,7 +186,10 @@ class DeepGemmRunnerCore(MoeRunnerCore):
             device=gateup_output.device,
             dtype=torch.bfloat16,
         )
-        silu_and_mul(gateup_output.view(-1, N), down_input)
+        if _is_musa:
+            down_input = nn.SwishGLU()(gateup_output.view(-1, N))
+        else:
+            silu_and_mul(gateup_output.view(-1, N), down_input)
         del gateup_output
 
         down_input_fp8, down_input_scale = sglang_per_token_group_quant_fp8(
