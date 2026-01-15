@@ -102,7 +102,7 @@ from sglang.srt.layers.moe.token_dispatcher.base import (
     DispatchOutput,
 )
 from sglang.srt.layers.moe.topk import TopK, TopKOutputFormat
-from sglang.srt.layers.moe.utils import RoutingMethodType, is_sbo_enabled
+from sglang.srt.layers.moe.utils import RoutingMethodType
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
 from sglang.srt.layers.quantization.fp8 import Fp8Config
 from sglang.srt.layers.quantization.fp8_kernel import (
@@ -820,10 +820,7 @@ class DeepseekV2MoE(nn.Module):
                     gemm_output_zero_allocator,
                 )
         else:
-            if not forward_batch.is_extend_in_batch and is_sbo_enabled():
-                return self.forward_deepep_sbo(hidden_states, forward_batch)
-            else:
-                return self.forward_deepep(hidden_states, forward_batch)
+            return self.forward_deepep(hidden_states, forward_batch)
 
     def forward_normal_dual_stream(
         self,
@@ -1147,55 +1144,6 @@ class DeepseekV2MoE(nn.Module):
             final_hidden_states = x
         else:
             if not self.experts.should_fuse_routed_scaling_factor_in_topk:
-                final_hidden_states *= self.routed_scaling_factor
-
-        return final_hidden_states
-
-    def forward_deepep_sbo(
-        self, hidden_states: torch.Tensor, forward_batch: ForwardBatch
-    ) -> torch.Tensor:
-        shared_output = None
-        if hidden_states.shape[0] > 0:
-            router_logits = self.gate(hidden_states)
-            topk_weights, topk_idx, _ = self.topk(
-                hidden_states,
-                router_logits,
-                num_token_non_padded=forward_batch.num_token_non_padded,
-                expert_location_dispatch_info=ExpertLocationDispatchInfo.init_new(
-                    layer_id=self.layer_id,
-                ),
-            )
-        else:
-            topk_weights, topk_idx, _ = self.topk.empty_topk_output(
-                hidden_states.device
-            )
-
-        forward_params = dict(
-            num_experts=self.num_experts,
-            tp_size=self.tp_size,
-            alt_stream=self.alt_stream,
-            shared_experts=(
-                self.shared_experts if self.num_fused_shared_experts == 0 else None
-            ),
-        )
-        final_hidden_states, shared_output = self.experts(
-            hidden_states=hidden_states,
-            topk_idx=topk_idx,
-            topk_weights=topk_weights,
-            forward_batch=forward_batch,
-            enable_sbo=True,
-            params=forward_params,
-        )
-
-        if shared_output is not None:
-            x = shared_output
-            if self.experts.should_fuse_routed_scaling_factor_in_topk():
-                x.add_(final_hidden_states)
-            else:
-                x.add_(final_hidden_states, alpha=self.routed_scaling_factor)
-            final_hidden_states = x
-        else:
-            if not self.experts.should_fuse_routed_scaling_factor_in_topk():
                 final_hidden_states *= self.routed_scaling_factor
 
         return final_hidden_states

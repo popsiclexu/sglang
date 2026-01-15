@@ -24,6 +24,8 @@ if ENABLE_JIT_DEEPGEMM:
 
 _SANITY_CHECK = get_bool_env_var("SGLANG_DEEPGEMM_SANITY_CHECK")
 
+_is_musa = is_musa()
+
 
 # TODO maybe rename these functions
 def grouped_gemm_nt_f8f8bf16_masked(
@@ -49,21 +51,23 @@ def grouped_gemm_nt_f8f8bf16_masked(
             overlap_args.num_sms if overlap_args is not None else None
         ):
 
+            kwargs = {}
+            if overlap_args is not None:
+                kwargs = {
+                    "enable_overlap": True,
+                    "signal": overlap_args.signal,
+                }
+                # XXX (MUSA): max_block_n is not supported on MUSA
+                if not _is_musa:
+                    kwargs["max_block_n"] = max_block_n
+
             return deep_gemm.fp8_m_grouped_gemm_nt_masked(
                 lhs,
                 rhs,
                 out,
                 masked_m,
                 expected_m,
-                **(
-                    dict(
-                        enable_overlap=True,
-                        max_block_n=max_block_n,
-                        signal=overlap_args.signal,
-                    )
-                    if overlap_args is not None
-                    else {}
-                ),
+                **kwargs,
             )
 
 
