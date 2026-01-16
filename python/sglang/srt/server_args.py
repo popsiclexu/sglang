@@ -437,9 +437,12 @@ class ServerArgs:
     ep_dispatch_algorithm: Optional[Literal["static", "dynamic", "fake"]] = None
     init_expert_location: str = "trivial"
     enable_eplb: bool = False
+    enable_eplb_rebalance_async: bool = False
+    disable_eplb_warmup: bool = False
     eplb_algorithm: str = "auto"
     eplb_rebalance_num_iterations: int = 1000
     eplb_rebalance_layers_per_chunk: Optional[int] = None
+    eplb_rebalance_experts_per_chunk: int = 10000
     eplb_min_rebalancing_utilization_threshold: float = 1.0
     expert_distribution_recorder_mode: Optional[
         Literal["stat", "stat_approx", "per_pass", "per_token"]
@@ -3217,6 +3220,16 @@ class ServerArgs:
             help="Enable EPLB algorithm",
         )
         parser.add_argument(
+            "--enable-eplb-rebalance-async",
+            action="store_true",
+            help="Enable asynchronous rebalance mode",
+        )
+        parser.add_argument(
+            "--disable-eplb-warmup",
+            action="store_true",
+            help="Disable eplb warmup",
+        )
+        parser.add_argument(
             "--eplb-algorithm",
             type=str,
             default=ServerArgs.eplb_algorithm,
@@ -3233,6 +3246,12 @@ class ServerArgs:
             type=int,
             default=ServerArgs.eplb_rebalance_layers_per_chunk,
             help="Number of layers to rebalance per forward pass.",
+        )
+        parser.add_argument(
+            "--eplb-rebalance-experts-per-chunk",
+            type=int,
+            default=ServerArgs.eplb_rebalance_experts_per_chunk,
+            help="Number of experts to rebalance per forward pass.",
         )
         parser.add_argument(
             "--eplb-min-rebalancing-utilization-threshold",
