@@ -114,6 +114,9 @@ def use_rowwise_torch_scaled_mm():
         # The condition is determined once as the operations
         # are time consuming.
         return get_device_capability() >= (9, 4) and _TORCH_VERSION_TUPLE >= (2, 7, 0)
+    elif _is_musa:
+        return get_device_capability() >= (3, 1)
+
     return False
 
 
