@@ -228,6 +228,7 @@ class DeepEPBuffer:
             num_qps_per_rank=num_qps_per_rank,
             # TODO can be false when unneeded
             allow_mnnvl=True,
+            allow_nvlink_for_low_latency_mode=envs.SGLANG_DEEPEP_LOW_LATENCY_USE_NVLINK.get(),
         )
         return cls._buffer
 
