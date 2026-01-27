@@ -17,10 +17,10 @@ from sglang.srt.utils import get_bool_env_var, is_musa
 logger = logging.getLogger(__name__)
 
 if ENABLE_JIT_DEEPGEMM:
-    import deep_gemm
-
     if not is_musa():
-        from deep_gemm.utils.layout import get_mn_major_tma_aligned_tensor  # noqa: F401
+        import deep_gemm
+    else:
+        import mate.deep_gemm as deep_gemm
 
 _SANITY_CHECK = get_bool_env_var("SGLANG_DEEPGEMM_SANITY_CHECK")
 
@@ -71,6 +71,36 @@ def grouped_gemm_nt_f8f8bf16_masked(
             )
 
 
+def grouped_gemm_nt_bf16_masked(
+    a: torch.Tensor,
+    b: torch.Tensor,
+    d: torch.Tensor,
+    masked_m: torch.Tensor,
+    expected_m: int,
+    overlap_args: Optional[Any] = None,
+    max_block_n: int = 256,
+):
+    with configure_deep_gemm_num_sms(
+        overlap_args.num_sms if overlap_args is not None else None
+    ):
+        return deep_gemm.m_grouped_bf16_gemm_nt_masked(
+            a,
+            b,
+            d,
+            masked_m,
+            expected_m,
+            **(
+                dict(
+                    enable_overlap=True,
+                    max_block_n=max_block_n,
+                    signal=overlap_args.signal,
+                )
+                if overlap_args is not None
+                else {}
+            ),
+        )
+
+
 def grouped_gemm_nt_f8f8bf16_contig(
     lhs: Tuple[torch.Tensor, torch.Tensor],
     rhs: Tuple[torch.Tensor, torch.Tensor],
@@ -85,9 +115,21 @@ def grouped_gemm_nt_f8f8bf16_contig(
     _sanity_check_input(rhs)
 
     with compile_utils.deep_gemm_execution_hook(m, n, k, num_groups, kernel_type):
+        kwargs = {"alignment_m": DEEPGEMM_BLOCK_M} if _is_musa else {}
         deep_gemm.m_grouped_fp8_gemm_nt_contiguous(
-            lhs, rhs, out, m_indices, block_m=DEEPGEMM_BLOCK_M
+            lhs,
+            rhs,
+            out,
+            m_indices,
+            **kwargs,
         )
+
+
+def grouped_gemm_nt_bf16_contig(
+    a: torch.Tensor, b: torch.Tensor, d: torch.Tensor, m_indices: torch.Tensor
+):
+    kwargs = {"alignment_m": DEEPGEMM_BLOCK_M} if _is_musa else {}
+    deep_gemm.m_grouped_bf16_gemm_nt_contiguous(a, b, d, m_indices, **kwargs)
 
 
 def gemm_nt_f8f8bf16(

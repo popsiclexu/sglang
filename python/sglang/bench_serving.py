@@ -1727,8 +1727,9 @@ async def get_request(
             yield request
     else:
         # Calculate scale parameter theta to maintain the desired request_rate.
-        assert burstiness > 0, (
-            f"A positive burstiness factor is expected, but given {burstiness}.")
+        assert (
+            burstiness > 0
+        ), f"A positive burstiness factor is expected, but given {burstiness}."
         theta = 1.0 / (request_rate * burstiness)
         input_requests_iter = iter(input_requests)
         for request in input_requests_iter:
@@ -2069,7 +2070,9 @@ async def benchmark(
         )
         pbar_total *= args.mooncake_num_rounds
     else:
-        request_generator = get_request(input_requests, request_rate, burstiness=args.burstiness)
+        request_generator = get_request(
+            input_requests, request_rate, burstiness=args.burstiness
+        )
 
     # Prepare LoRA request distribution parameters
     if lora_request_distribution == "distinct":
