@@ -163,7 +163,7 @@ class Indexer(CustomOp):
         self.scale_fmt = scale_fmt
         self.softmax_scale = self.head_dim**-0.5
 
-    @torch.compile(dynamic=True)
+    # @torch.compile(dynamic=True)
     def _get_logits_head_gate(self, x: torch.Tensor, q_scale: torch.Tensor):
         weights, _ = self.weights_proj(x.float())
         weights = weights * self.n_heads**-0.5
@@ -738,7 +738,7 @@ class Indexer(CustomOp):
             forward_batch.req_pool_indices, :
         ]
         strided_indices = torch.arange(
-            0, block_tables.shape[-1], page_size, device="cuda"
+            0, block_tables.shape[-1], page_size, device="musa"
         )
         block_tables = block_tables[:, strided_indices] // page_size
 
@@ -791,7 +791,11 @@ class Indexer(CustomOp):
 
             q_len_start = q_len_end
 
-        topk_indices = torch.cat(topk_indices_list, dim=0)
+        # NOTICE(MUSA): why topk_indices_list is empty?? I've no idea.
+        if len(topk_indices_list) == 0:
+            topk_indices = torch.zeros((max(1, forward_batch.batch_size),topk), dtype=torch.int64, device=q_fp8.device)
+        else:
+            topk_indices = torch.cat(topk_indices_list, dim=0)
         return topk_indices
 
     def forward_cuda(
@@ -835,6 +839,8 @@ class Indexer(CustomOp):
                 max_kv_len = forward_batch.seq_lens_cpu.max().item()
                 skip_logits_computation = max_kv_len <= self.index_topk
 
+        # NOTICE(MUSA): always use nsa indexer
+        skip_logits_computation = False
         # Optimization: fast path when skipping topk computation
         if skip_logits_computation and (not self.nsa_enable_prefill_cp):
             return self._forward_cuda_k_only(
