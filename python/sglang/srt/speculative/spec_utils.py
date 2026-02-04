@@ -22,6 +22,7 @@ from sglang.srt.managers.schedule_batch import Req
 from sglang.srt.utils import is_cuda, is_hip, is_musa, is_npu, next_power_of_2
 
 _is_cuda = is_cuda()
+_is_musa = is_musa()
 _is_hip = is_hip()
 _is_npu = is_npu()
 _is_musa = is_musa()
@@ -31,6 +32,8 @@ if TYPE_CHECKING:
 
 
 if _is_cuda:
+    from sgl_kernel import fast_topk
+elif _is_musa:
     from sgl_kernel import fast_topk
 elif _is_hip:
     from sgl_kernel import fast_topk
@@ -48,7 +51,7 @@ SIMULATE_ACC_METHOD = envs.SGLANG_SIMULATE_ACC_METHOD.get()
 TREE_TRAVERSE_TIME_THRESHOLD = 1  # TODO: set this properly
 TREE_SPEC_KERNEL_AVAILABLE = (
     _is_cuda or _is_musa
-)  # This kernel is only available for CUDA now
+)  # This kernel is only available for CUDA and MUSA now
 
 
 @triton.jit
