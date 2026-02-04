@@ -8,6 +8,7 @@ from torch import nn
 from sglang.srt.compilation.piecewise_context_manager import get_forward_context
 from sglang.srt.configs.qwen3_next import Qwen3NextConfig
 from sglang.srt.distributed import divide, get_pp_group
+from sglang.srt.environ import envs
 from sglang.srt.eplb.expert_distribution import get_global_expert_distribution_recorder
 from sglang.srt.eplb.expert_location import ModelConfigForExpertLocation
 from sglang.srt.layers.attention.fla.layernorm_gated import RMSNorm as RMSNormGated
@@ -45,6 +46,7 @@ from sglang.srt.utils import (
     LazyValue,
     add_prefix,
     is_cuda,
+    is_musa,
     is_npu,
     make_layers,
     set_weight_attrs,
@@ -52,6 +54,7 @@ from sglang.srt.utils import (
 
 logger = logging.getLogger(__name__)
 _is_cuda = is_cuda()
+_is_musa = is_musa()
 _is_npu = is_npu()
 
 
@@ -818,6 +821,8 @@ class Qwen3NextModel(nn.Module):
 
         self.norm = GemmaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.infer_count = 0
+        if _is_musa:
+            envs.SGLANG_MUSA_FA3_FORCE_UPDATE_METADATA.set(True)
 
     def forward(
         self,

@@ -7,6 +7,7 @@ from mate import flash_attn_with_kvcache as _mate_flash_attn_with_kvcache
 from mate.mha_interface import get_scheduler_metadata
 
 from sglang.srt.distributed import get_pp_group, get_pp_indices
+from sglang.srt.environ import envs
 
 MATE_MLA_WORKSPACE_BUFFER: torch.tensor | None = None
 MATE_NO_MLA_SCHEDULER_MATEDATA_DICT = dict()
@@ -72,6 +73,9 @@ def mate_flash_attn_with_kvcache_wrapper(
 
     if current_layer_id > start_layer_id:
         should_update = False
+
+    if envs.SGLANG_MUSA_FA3_FORCE_UPDATE_METADATA.get():
+        should_update = True
 
     if use_mla:
         global MATE_MLA_WORKSPACE_BUFFER
