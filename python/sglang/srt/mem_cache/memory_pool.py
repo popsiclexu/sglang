@@ -50,7 +50,7 @@ from sglang.srt.mem_cache.utils import (
     set_mla_kv_buffer_triton,
     set_mla_kv_scale_buffer_triton,
 )
-from sglang.srt.utils import is_cuda, is_npu, next_power_of_2
+from sglang.srt.utils import is_cuda, is_musa, is_npu, next_power_of_2
 
 if TYPE_CHECKING:
     from sglang.srt.managers.cache_controller import LayerDoneCounter
@@ -62,6 +62,7 @@ logger = logging.getLogger(__name__)
 GB = 1024 * 1024 * 1024
 _is_cuda = is_cuda()
 _is_npu = is_npu()
+_is_musa = is_musa()
 
 
 def get_tensor_size_bytes(t: Union[torch.Tensor, List[torch.Tensor]]):
@@ -202,7 +203,7 @@ class MambaPool:
                         temporal_state_shape[2],
                     ),
                     dtype=ssm_dtype,
-                    device="cuda",
+                    device="cuda" if not _is_musa else "musa",
                 )
                 # Cache intermediate conv windows (last K-1 inputs) per draft token during target verify
                 # Shape: [num_layers, size + 1, speculative_num_draft_tokens, dim, K-1]
@@ -216,7 +217,7 @@ class MambaPool:
                             conv_shape[1],
                         ),
                         dtype=conv_dtype,
-                        device="cuda",
+                        device="cuda" if not _is_musa else "musa",
                     )
                     for conv_shape in conv_state_shape
                 ]

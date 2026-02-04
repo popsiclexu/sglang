@@ -228,7 +228,7 @@ class DeepEPBuffer:
             num_qps_per_rank=num_qps_per_rank,
             # TODO can be false when unneeded
             allow_mnnvl=True,
-            allow_nvlink_for_low_latency_mode=envs.SGLANG_DEEPEP_LOW_LATENCY_USE_NVLINK.get(),
+            allow_nvlink_for_low_latency_mode=envs.SGLANG_DEEPEP_LL_USE_NVLINK.get(),
         )
         return cls._buffer
 
@@ -546,7 +546,9 @@ class _DeepEPDispatcherImplLowLatency(_DeepEPDispatcherImplBase):
         num_max_dispatch_tokens_per_rank: the actual batch size in the decoding engine should be less than 256
         https://github.com/deepseek-ai/DeepEP?tab=readme-ov-file#example-use-in-inference-decoding
         """
-        self.return_recv_hook = return_recv_hook
+        self.return_recv_hook = (
+            return_recv_hook and not envs.SGLANG_DEEPEP_LL_DISABLE_RECV_HOOK.get()
+        )
         self.device_module = torch.get_device_module()
         self.quant_config = {}
 
