@@ -214,7 +214,7 @@ def sparse_attention_fwd_kernel_v1(
     kv_group=1,
     sm_scale=None,
     is_causal=True,
-    block_I=64,
+    block_I=32, # NOTICE(MUSA): change from 64 to 32 because of share memory malloc failed problem.
     num_stages=2,
     threads=256,
 ):
@@ -247,7 +247,8 @@ def sparse_attention_fwd_kernel_v1(
     accum_dtype = "float"
 
     H = head_kv
-    padded_H = max(tilelang.math.next_power_of_2(head_kv), 16)
+    # NOTICE(MUSA): change from 16 to 32 because of pure TP will be failed.
+    padded_H = max(tilelang.math.next_power_of_2(head_kv), 32)
     if padded_H != H:
         assert kv_group == 1
     BI = block_I
@@ -264,7 +265,7 @@ def sparse_attention_fwd_kernel_v1(
     H_per_block = padded_H if REPLICATE_H == 1 else 64
 
     num_stages = 0
-    threads = 32
+    threads = 128
 
     @T.prim_func
     def main(
@@ -280,9 +281,9 @@ def sparse_attention_fwd_kernel_v1(
         ):
             Q_shared = T.alloc_shared([H_per_block, D], dtype)
             Q_tail_shared = T.alloc_shared([H_per_block, D_tail], dtype)
-            KV_shared = T.alloc_shared([BI, D], dtype)
+            KV_shared_qk = T.alloc_shared([BI, D], dtype)
+            KV_shared_vo = T.alloc_shared([BI, D], dtype)
             K_tail_shared = T.alloc_shared([BI, D_tail], dtype)
-            O_shared = T.alloc_shared([H_per_block, D], dtype)
             mask = T.alloc_fragment([BI], "bool")
 
             acc_o = T.alloc_fragment([H_per_block, D], accum_dtype)
@@ -301,7 +302,6 @@ def sparse_attention_fwd_kernel_v1(
             b_i, g_i = by, bz
             s_i = bx if REPLICATE_H == 1 else (bx // REPLICATE_H)
             q_i = s_i
-            max_kv_i = q_i
 
             H0 = g_i * padded_H + (0 if REPLICATE_H == 1 else (bx % REPLICATE_H) * 64)
             H1 = H0 + H_per_block
@@ -315,7 +315,10 @@ def sparse_attention_fwd_kernel_v1(
                     mask[bi_i] = Indices[b_i, s_i, g_i, i_i * BI + bi_i] >= 0
 
                 for bi_i, d_i in T.Parallel(BI, D):
-                    KV_shared[bi_i, d_i] = KV[
+                    KV_shared_qk[bi_i, d_i] = KV[
+                        b_i, Indices[b_i, s_i, g_i, i_i * BI + bi_i], g_i, d_i
+                    ]
+                    KV_shared_vo[bi_i, d_i] = KV[
                         b_i, Indices[b_i, s_i, g_i, i_i * BI + bi_i], g_i, d_i
                     ]
                 for bi_i, d_i in T.Parallel(BI, D_tail):
@@ -329,7 +332,7 @@ def sparse_attention_fwd_kernel_v1(
                     )
                 T.gemm(
                     Q_shared,
-                    KV_shared,
+                    KV_shared_qk,
                     acc_s,
                     transpose_B=True,
                     policy=T.GemmWarpPolicy.FullCol,
@@ -356,7 +359,7 @@ def sparse_attention_fwd_kernel_v1(
                     acc_o[h_i, d_i] = acc_o[h_i, d_i] * alpha[h_i]
 
                 T.copy(acc_s, S_shared)
-                T.gemm(S_shared, KV_shared, acc_o, policy=T.GemmWarpPolicy.FullCol)
+                T.gemm(S_shared, KV_shared_vo, acc_o, policy=T.GemmWarpPolicy.FullCol)
 
             # Rescale
             for h_i, d_i in T.Parallel(H_per_block, D):
@@ -364,7 +367,6 @@ def sparse_attention_fwd_kernel_v1(
             for h_i in T.Parallel(H_per_block):
                 sumexp[h_i] = T.log2(sumexp[h_i]) + m_i[h_i] * sm_scale
 
-            T.copy(acc_o, O_shared)
             T.copy(acc_o, Output[b_i, s_i, H0:H1, :])
 
     return main
