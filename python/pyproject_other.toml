@@ -94,11 +94,12 @@ srt_hpu = ["sglang[runtime_common]"]
 # XXX (MUSA): Adding comments
 srt_musa = [
     "sglang[runtime_common]",
-    "torch==2.5.0",
+    "torch==2.7.1",
     "torch_musa",
     "bidict",
     "mthreads-ml-py",
     "numpy<2.0",
+    "triton==3.2.0",
 ]
 
 test = [

@@ -61,6 +61,7 @@ logger = logging.getLogger(__name__)
 
 GB = 1024 * 1024 * 1024
 _is_cuda = is_cuda()
+_is_musa = is_cuda()
 _is_npu = is_npu()
 
 
@@ -551,7 +552,9 @@ class MHATokenToKVPool(KVCache):
 
         self.device_module = torch.get_device_module(self.device)
         self.alt_stream = (
-            self.device_module.Stream() if _is_cuda and enable_alt_stream else None
+            self.device_module.Stream()
+            if (_is_cuda or _is_musa) and enable_alt_stream
+            else None
         )
 
         if enable_kv_cache_copy:

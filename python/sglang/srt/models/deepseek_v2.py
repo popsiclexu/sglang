@@ -212,7 +212,6 @@ elif _is_musa:
         dsv3_fused_a_gemm,
         dsv3_router_gemm,
         merge_state_v2,
-        musa_fused_gemv,
         musa_fused_mul_add,
     )
 
@@ -608,14 +607,7 @@ class MoEGate(nn.Module):
                     hidden_states, self.weight, gemm_output_zero_allocator
                 )
             else:
-                if (
-                    _use_musa_fused_kernel
-                    and torch.cuda.get_device_capability() >= (3, 1)
-                    and hidden_states.shape[0] < 3
-                ):
-                    logits = musa_fused_gemv(hidden_states, self.weight)
-                else:
-                    logits = F.linear(hidden_states, self.weight, None)
+                logits = F.linear(hidden_states, self.weight, None)
 
         return logits
 
@@ -3057,7 +3049,7 @@ class DeepseekV2Model(nn.Module):
         else:
             self.embed_tokens = PPMissingLayer()
 
-        self.alt_stream = torch.cuda.Stream() if _is_cuda else None
+        self.alt_stream = torch.cuda.Stream() if _is_cuda or _is_musa else None
         self.layers, self.start_layer, self.end_layer = make_layers(
             config.num_hidden_layers,
             lambda idx, prefix: DeepseekV2DecoderLayer(
