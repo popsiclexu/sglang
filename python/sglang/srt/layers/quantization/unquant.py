@@ -51,9 +51,6 @@ if _use_aiter:
     from aiter.fused_moe import fused_moe
     from aiter.ops.shuffle import shuffle_weight
 
-if _is_musa:
-    from sgl_kernel import musa_fused_gemv
-
 try:
     from flashinfer.fused_moe import cutlass_fused_moe as flashinfer_cutlass_fused_moe
 except ImportError:
@@ -92,14 +89,6 @@ class UnquantizedEmbeddingMethod(QuantizeMethodBase):
         x: torch.Tensor,
         bias: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        if (
-            _use_musa_fused_kernel
-            and torch.cuda.get_device_capability() >= (3, 1)
-            and bias is None
-            and x.shape[0] < 3
-            and x.dim() == 2  # XXX (MUSA): fused_gemv - A must be dim 2
-        ):
-            return musa_fused_gemv(x, layer.weight)
         return F.linear(x, layer.weight, bias)
 
     def embedding(self, layer: torch.nn.Module, input_: torch.Tensor) -> torch.Tensor:
@@ -154,16 +143,6 @@ class UnquantizedLinearMethod(LinearMethodBase):
             if len(x_shapes) == 3:
                 output = output.view(x_shapes[0], x_shapes[1], -1)
             return output
-
-        if (
-            _use_musa_fused_kernel
-            and torch.cuda.get_device_capability() >= (3, 1)
-            and bias is None
-            and x.shape[0] < 3
-            and x.dim() == 2  # XXX (MUSA): fused_gemv - A must be dim 2
-        ):
-            return musa_fused_gemv(x, layer.weight)
-
         return F.linear(x, layer.weight, bias)
 
 

@@ -796,7 +796,7 @@ class Qwen3NextModel(nn.Module):
         super().__init__()
         self.config = config
 
-        alt_stream = torch.cuda.Stream() if _is_cuda else None
+        alt_stream = torch.cuda.Stream() if _is_cuda or _is_musa else None
 
         self.embed_tokens = VocabParallelEmbedding(
             config.vocab_size,
