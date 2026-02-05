@@ -8,7 +8,6 @@ from torch import nn
 from sglang.srt.compilation.piecewise_context_manager import get_forward_context
 from sglang.srt.configs.qwen3_next import Qwen3NextConfig
 from sglang.srt.distributed import divide, get_pp_group
-from sglang.srt.environ import envs
 from sglang.srt.eplb.expert_distribution import get_global_expert_distribution_recorder
 from sglang.srt.eplb.expert_location import ModelConfigForExpertLocation
 from sglang.srt.layers.attention.fla.layernorm_gated import RMSNorm as RMSNormGated
@@ -796,7 +795,7 @@ class Qwen3NextModel(nn.Module):
         super().__init__()
         self.config = config
 
-        alt_stream = torch.cuda.Stream() if _is_cuda else None
+        alt_stream = torch.cuda.Stream() if _is_cuda or _is_musa else None
 
         self.embed_tokens = VocabParallelEmbedding(
             config.vocab_size,
@@ -821,8 +820,6 @@ class Qwen3NextModel(nn.Module):
 
         self.norm = GemmaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.infer_count = 0
-        if _is_musa:
-            envs.SGLANG_MUSA_FA3_FORCE_UPDATE_METADATA.set(True)
 
     def forward(
         self,

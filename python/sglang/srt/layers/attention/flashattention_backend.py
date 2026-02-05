@@ -335,8 +335,6 @@ class FlashAttentionBackend(AttentionBackend):
         self.kv_cache_dtype_str = model_runner.server_args.kv_cache_dtype
         self.page_size = model_runner.page_size
         self.use_mla = model_runner.model_config.attention_arch == AttentionArch.MLA
-        self.num_hidden_layers = model_runner.model_config.num_hidden_layers
-        self.first_k_dense_replace = model_runner.model_config.first_k_dense_replace
         self.skip_prefill = skip_prefill
         self.is_hybrid_swa = model_runner.is_hybrid_swa
         if self.is_hybrid_swa:
@@ -371,6 +369,15 @@ class FlashAttentionBackend(AttentionBackend):
         self.num_splits = (
             1 if model_runner.server_args.enable_deterministic_inference else 0
         )
+
+        if _is_musa:
+            self.musa_flash_attn_with_kvcache_fwd_kwargs = {
+                "device": self.device,
+                "use_mla": self.use_mla,
+                "num_hidden_layers": model_runner.model_config.num_hidden_layers,
+                "first_k_dense_replace": model_runner.model_config.first_k_dense_replace,
+                "full_attention_interval": model_runner.model_config.full_attention_interval,
+            }
 
     def init_forward_metadata(self, forward_batch: ForwardBatch):
         """Initialize forward metadata hence all layers in the forward pass can reuse it."""
@@ -804,14 +811,11 @@ class FlashAttentionBackend(AttentionBackend):
 
         if _is_musa:
             kwargs = {
+                **self.musa_flash_attn_with_kvcache_fwd_kwargs,
                 "layer": layer,
                 "prefix": "forward_extend",
-                "device": self.device,
-                "use_mla": self.use_mla,
                 "max_seqlen_k": max_seqlen_k,
                 "can_run_tbo": forward_batch.can_run_tbo,
-                "num_hidden_layers": self.num_hidden_layers,
-                "first_k_dense_replace": self.first_k_dense_replace,
             }
 
         # Use Flash Attention for prefill
@@ -1135,14 +1139,11 @@ class FlashAttentionBackend(AttentionBackend):
 
         if _is_musa:
             kwargs = {
+                **self.musa_flash_attn_with_kvcache_fwd_kwargs,
                 "layer": layer,
-                "device": self.device,
                 "prefix": "forward_decode",
-                "use_mla": self.use_mla,
                 "max_seqlen_k": metadata.max_seq_len_k,
                 "can_run_tbo": forward_batch.can_run_tbo,
-                "num_hidden_layers": self.num_hidden_layers,
-                "first_k_dense_replace": self.first_k_dense_replace,
             }
 
         k_descale, v_descale = None, None
