@@ -412,7 +412,10 @@ class ModelConfig:
             self.hf_text_config, "num_key_value_heads", None
         )
         self.first_k_dense_replace = getattr(
-            self.hf_text_config, "first_k_dense_replace", 0
+            self.hf_text_config, "first_k_dense_replace", None
+        )
+        self.full_attention_interval = getattr(
+            self.hf_text_config, "full_attention_interval", None
         )
 
         # for Dbrx and MPT models

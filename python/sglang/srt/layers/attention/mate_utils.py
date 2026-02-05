@@ -55,6 +55,7 @@ def mate_flash_attn_with_kvcache_wrapper(
     max_seqlen_k = kwargs["max_seqlen_k"]
     num_hidden_layers = kwargs["num_hidden_layers"]
     first_k_dense_replace = kwargs["first_k_dense_replace"]
+    full_attention_interval = kwargs["full_attention_interval"]
 
     current_layer_id = layer.layer_id
     batch_size = cu_seqlens_q.shape[-1] - 1
@@ -63,13 +64,20 @@ def mate_flash_attn_with_kvcache_wrapper(
     # Note: Scheduler metadata must be updated on the first call to `_mate_flash_attn_with_kvcache`
     # - Each pipeline rank updates metadata once during pipeline parallelism.
     # - Front dense layers in two-batch overlap skip this update (they don't call this method).
+    # - Skip metadata update for linear attention layers in Qwen3-Next-like models based on full attention interval.
     should_update = True
     pp_group = get_pp_group()
+    pp_rank = pp_group.rank_in_group
     start_layer_id, _ = get_pp_indices(
         num_hidden_layers, pp_group.rank_in_group, pp_group.world_size
     )
-    if can_run_tbo and start_layer_id == 0:
-        start_layer_id += first_k_dense_replace
+    if can_run_tbo and pp_rank == 0:
+        start_layer_id += (
+            first_k_dense_replace if first_k_dense_replace is not None else 0
+        )
+
+    if full_attention_interval is not None:
+        start_layer_id += full_attention_interval - 1
 
     if current_layer_id > start_layer_id:
         should_update = False
