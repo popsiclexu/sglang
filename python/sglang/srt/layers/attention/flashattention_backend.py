@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
@@ -29,7 +30,16 @@ if not _is_musa:
 else:
     from mate import flash_attn_varlen_func
 
-    from sglang.srt.layers.attention.mate_utils import flash_attn_with_kvcache
+    from sglang.srt.hardware_backend.musa.attention import (
+        FlashAttentionContext,
+        FlashAttentionContextManager,
+    )
+    from sglang.srt.hardware_backend.musa.attention import (
+        flash_attn_with_kvcache as flash_attn_with_kvcache,
+    )
+    from sglang.srt.hardware_backend.musa.attention import (
+        update_flash_attention_context,
+    )
 
 
 @dataclass
@@ -371,13 +381,11 @@ class FlashAttentionBackend(AttentionBackend):
         )
 
         if _is_musa:
-            self.musa_flash_attn_with_kvcache_fwd_kwargs = {
-                "device": self.device,
-                "use_mla": self.use_mla,
-                "num_hidden_layers": model_runner.model_config.num_hidden_layers,
-                "first_k_dense_replace": model_runner.model_config.first_k_dense_replace,
-                "full_attention_interval": model_runner.model_config.full_attention_interval,
-            }
+            self.num_hidden_layers = model_runner.model_config.num_hidden_layers
+            self.first_k_dense_replace = model_runner.model_config.first_k_dense_replace
+            self.full_attention_interval = (
+                model_runner.model_config.full_attention_interval
+            )
 
     def init_forward_metadata(self, forward_batch: ForwardBatch):
         """Initialize forward metadata hence all layers in the forward pass can reuse it."""
@@ -809,15 +817,75 @@ class FlashAttentionBackend(AttentionBackend):
             cu_seqlens_k = metadata.cu_seqlens_k
             max_seqlen_k = metadata.max_seq_len_k
 
-        if _is_musa:
-            kwargs = {
-                **self.musa_flash_attn_with_kvcache_fwd_kwargs,
-                "layer": layer,
-                "prefix": "forward_extend",
-                "max_seqlen_k": max_seqlen_k,
-                "can_run_tbo": forward_batch.can_run_tbo,
-            }
+        # Create MUSA flash attention context manager (or nullcontext for CUDA)
+        musa_ctx = (
+            FlashAttentionContextManager(
+                FlashAttentionContext(
+                    device=self.device,
+                    use_mla=self.use_mla,
+                    num_hidden_layers=self.num_hidden_layers,
+                    first_k_dense_replace=self.first_k_dense_replace,
+                    full_attention_interval=self.full_attention_interval,
+                    layer=layer,
+                    prefix="forward_extend",
+                    max_seqlen_k=max_seqlen_k,
+                    can_run_tbo=forward_batch.can_run_tbo,
+                )
+            )
+            if _is_musa
+            else nullcontext()
+        )
 
+        with musa_ctx:
+            return self._forward_extend_impl(
+                q=q,
+                k=k,
+                v=v,
+                layer=layer,
+                forward_batch=forward_batch,
+                metadata=metadata,
+                page_table=page_table,
+                cache_seqlens=cache_seqlens,
+                cu_seqlens_q=cu_seqlens_q,
+                cu_seqlens_k=cu_seqlens_k,
+                max_seqlen_q=max_seqlen_q,
+                max_seqlen_k=max_seqlen_k,
+                window_size=window_size,
+                k_descale=k_descale,
+                v_descale=v_descale,
+                causal=causal,
+                use_cascade_attn=use_cascade_attn,
+                use_local_attn=use_local_attn,
+                q_rope=q_rope,
+                k_rope=k_rope,
+                **kwargs,
+            )
+
+    def _forward_extend_impl(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        layer: "RadixAttention",
+        forward_batch: ForwardBatch,
+        metadata,
+        page_table,
+        cache_seqlens,
+        cu_seqlens_q,
+        cu_seqlens_k,
+        max_seqlen_q,
+        max_seqlen_k,
+        window_size,
+        k_descale,
+        v_descale,
+        causal,
+        use_cascade_attn,
+        use_local_attn,
+        q_rope,
+        k_rope,
+        **kwargs,
+    ):
+        """Internal implementation of forward_extend, wrapped by context manager."""
         # Use Flash Attention for prefill
         if not self.use_mla:
             # Do multi-head attention
@@ -863,11 +931,9 @@ class FlashAttentionBackend(AttentionBackend):
 
                 if use_cascade_attn:
                     if _is_musa:
-                        kwargs.update(
-                            {
-                                "prefix": "forward_extend_use_cascade_attn",
-                                "max_seq_len_k": self.forward_metadata_spec_decode_expand.max_seq_len_k,
-                            }
+                        update_flash_attention_context(
+                            prefix="forward_extend_use_cascade_attn",
+                            max_seqlen_k=self.forward_metadata_spec_decode_expand.max_seq_len_k,
                         )
                     o, softmax_lse, *rest = result
                     o_expand, softmax_lse_expand, *rest_expand = (
@@ -1032,7 +1098,6 @@ class FlashAttentionBackend(AttentionBackend):
                     v_descale=v_descale,
                     return_softmax_lse=use_cascade_attn,
                     num_splits=self.num_splits,
-                    **kwargs,
                 )
                 if use_cascade_attn:
                     o, softmax_lse, *rest = result
@@ -1055,7 +1120,6 @@ class FlashAttentionBackend(AttentionBackend):
                             v_descale=v_descale,
                             return_softmax_lse=True,
                             num_splits=self.num_splits,
-                            **kwargs,
                         )
                     )
 
@@ -1137,15 +1201,57 @@ class FlashAttentionBackend(AttentionBackend):
         if sinks is not None:
             kwargs["sinks"] = sinks
 
-        if _is_musa:
-            kwargs = {
-                **self.musa_flash_attn_with_kvcache_fwd_kwargs,
-                "layer": layer,
-                "prefix": "forward_decode",
-                "max_seqlen_k": metadata.max_seq_len_k,
-                "can_run_tbo": forward_batch.can_run_tbo,
-            }
+        # Create MUSA flash attention context manager (or nullcontext for CUDA)
+        musa_ctx = (
+            FlashAttentionContextManager(
+                FlashAttentionContext(
+                    device=self.device,
+                    use_mla=self.use_mla,
+                    num_hidden_layers=self.num_hidden_layers,
+                    first_k_dense_replace=self.first_k_dense_replace,
+                    full_attention_interval=self.full_attention_interval,
+                    layer=layer,
+                    prefix="forward_decode",
+                    max_seqlen_k=metadata.max_seq_len_k,
+                    can_run_tbo=forward_batch.can_run_tbo,
+                )
+            )
+            if _is_musa
+            else nullcontext()
+        )
 
+        with musa_ctx:
+            return self._forward_decode_impl(
+                q=q,
+                layer=layer,
+                forward_batch=forward_batch,
+                metadata=metadata,
+                window_size=window_size,
+                causal=causal,
+                use_cascade_attn=use_cascade_attn,
+                use_local_attn=use_local_attn,
+                local_attn_metadata=local_attn_metadata,
+                q_rope=q_rope,
+                k_rope=k_rope,
+                kwargs=kwargs,
+            )
+
+    def _forward_decode_impl(
+        self,
+        q: torch.Tensor,
+        layer: "RadixAttention",
+        forward_batch: ForwardBatch,
+        metadata,
+        window_size,
+        causal,
+        use_cascade_attn,
+        use_local_attn,
+        local_attn_metadata,
+        q_rope,
+        k_rope,
+        **kwargs,
+    ):
+        """Internal implementation of forward_decode, wrapped by context manager."""
         k_descale, v_descale = None, None
         # only use kv scaling if: 1) fp8 kv is explicitly enabled, 2) RadixAttention
         # has corresponding quantization method so that layer.k_scale is not None,
@@ -1241,11 +1347,9 @@ class FlashAttentionBackend(AttentionBackend):
                 )
                 if use_cascade_attn:
                     if _is_musa:
-                        kwargs.update(
-                            {
-                                "prefix": "forward_decode_use_cascade_attn",
-                                "max_seq_len_k": self.forward_metadata_spec_decode_expand.max_seq_len_k,
-                            }
+                        update_flash_attention_context(
+                            prefix="forward_decode_use_cascade_attn",
+                            max_seqlen_k=self.forward_metadata_spec_decode_expand.max_seq_len_k,
                         )
                     o, softmax_lse, *rest = result
                     o_expand, softmax_lse_expand, *rest_expand = (
@@ -1321,7 +1425,6 @@ class FlashAttentionBackend(AttentionBackend):
                 v_descale=v_descale,
                 return_softmax_lse=use_cascade_attn,  # softmax_lse is needed for merge states
                 num_splits=self.num_splits,
-                **kwargs,
             )
 
             if use_cascade_attn:
@@ -1344,7 +1447,6 @@ class FlashAttentionBackend(AttentionBackend):
                     v_descale=v_descale,
                     return_softmax_lse=True,
                     num_splits=self.num_splits,
-                    **kwargs,
                 )
 
                 o, _ = merge_state_v2(
