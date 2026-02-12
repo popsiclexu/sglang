@@ -346,6 +346,7 @@ class LogitsProcessor(nn.Module):
             return LogitsProcessorOutput(
                 next_token_logits=sampled_logits,
                 hidden_states=hidden_states_to_store,
+                mm_input_embeds=logits_metadata.mm_input_embeds,
             )
 
         # Start to process input logprobs
@@ -391,6 +392,7 @@ class LogitsProcessor(nn.Module):
             input_top_logprobs_idx=logprobs_result.input_top_logprobs_idx,
             input_token_ids_logprobs_val=logprobs_result.input_token_ids_logprobs_val,
             input_token_ids_logprobs_idx=logprobs_result.input_token_ids_logprobs_idx,
+            mm_input_embeds=logits_metadata.mm_input_embeds,
         )
 
     def _get_pruned_states(
@@ -617,6 +619,10 @@ class LogitsProcessor(nn.Module):
             input_top_logprobs_idx=input_top_logprobs_idx,
             input_token_ids_logprobs_val=input_token_ids_logprobs_val,
             input_token_ids_logprobs_idx=input_token_ids_logprobs_idx,
+            # FIXME: These fields are not logits-related but are passed through here as a
+            # workaround since ForwardBatch is local to forward_batch_generation().
+            # They should be moved to GenerationBatchResult to keep this class clean.
+            mm_input_embeds=logits_metadata.mm_input_embeds,
         )
 
     def process_input_logprobs_by_chunk(
