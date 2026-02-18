@@ -37,6 +37,7 @@ from sglang.srt.layers.linear import ColumnParallelLinear, RowParallelLinear
 from sglang.srt.layers.logits_processor import LogitsProcessor
 from sglang.srt.layers.pooler import Pooler, PoolingType
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
+from sglang.srt.layers.utils import PPMissingLayer
 from sglang.srt.layers.vocab_parallel_embedding import ParallelLMHead
 from sglang.srt.managers.mm_utils import (
     MultiModalityDataPaddingPatternMultimodalTokens,
@@ -605,9 +606,9 @@ class Qwen3VLForConditionalGeneration(nn.Module):
             config.vision_config,
             # NOTE: Qwen3-VL vision encoder currently supports BitsAndBytes 4-bit quantization.
             # Other quantization methods (e.g., GPTQ, AWQ) are untested and may not be supported.
-            quant_config=quant_config,
+            quant_config=None,
             norm_eps=getattr(config, "rms_norm_eps", 1e-6),
-            prefix=add_prefix("visual", prefix),
+            prefix=add_prefix("model.visual", prefix),
             use_data_parallel=self.use_data_parallel,
         )
 
@@ -617,14 +618,25 @@ class Qwen3VLForConditionalGeneration(nn.Module):
         else:
             self.config = config.text_config  # for qwen3-omni
 
-        self.model = language_model_cls(
-            config=self.config,
-            quant_config=quant_config,
-            prefix=add_prefix("model", prefix),
-        )
-
-        if self.config.tie_word_embeddings:
-            self.lm_head = self.model.embed_tokens
+        if not hasattr(config, "encoder_only") or not config.encoder_only:
+            self.model = language_model_cls(
+                config=self.config,
+                quant_config=quant_config,
+                prefix=add_prefix("model.language_model", prefix),
+            )
+            if self.pp_group.is_last_rank:
+                if self.pp_group.world_size == 1 and self.config.tie_word_embeddings:
+                    self.lm_head = self.model.embed_tokens
+                else:
+                    self.lm_head = ParallelLMHead(
+                        self.config.vocab_size,
+                        self.config.hidden_size,
+                        quant_config=quant_config,
+                        use_attn_tp_group=get_global_server_args().enable_dp_lm_head,
+                        prefix=add_prefix("lm_head", prefix),
+                    )
+            else:
+                self.lm_head = PPMissingLayer()
         else:
             self.lm_head = ParallelLMHead(
                 self.config.vocab_size,
@@ -782,7 +794,6 @@ class Qwen3VLForConditionalGeneration(nn.Module):
                 if "visual" in name:
                     # adapt to VisionAttention
                     name = name.replace(r"attn.qkv.", r"attn.qkv_proj.")
-                    name = name.replace(r"model.visual.", r"visual.")
 
                 try:
                     # Skip loading extra bias for GPTQ models.

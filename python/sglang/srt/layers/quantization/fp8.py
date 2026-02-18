@@ -169,8 +169,11 @@ class Fp8Config(QuantizationConfig):
             config, ["ignored_layers", "modules_to_not_convert"], None
         )
         if ignored_layers:
-            # hacking ministral
-            ignored_layers = [layer.replace("model.", "") for layer in ignored_layers]
+            if "mistral3" in config.get("model_type", ""):
+                # hack for ministral
+                ignored_layers = [
+                    layer.replace("model.", "") for layer in ignored_layers
+                ]
         weight_block_size = cls.get_from_keys_or(config, ["weight_block_size"], None)
         return cls(
             is_checkpoint_fp8_serialized=is_checkpoint_fp8_serialized,
