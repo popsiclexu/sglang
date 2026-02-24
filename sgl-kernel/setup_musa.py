@@ -299,6 +299,7 @@ sources = [
     "csrc_musa/moe/moe_sum.cu",
     "csrc_musa/moe/moe_sum_reduce.cu",
     "csrc_musa/moe/moe_topk_softmax_kernels.cu",
+    "csrc_musa/moe/moe_topk_sigmoid_kernels.cu",
     "csrc_musa/quantization/gguf/gguf_kernel.cu",
     "csrc_musa/speculative/eagle_utils.cu",
     "csrc_musa/speculative/ngram_utils.cu",
