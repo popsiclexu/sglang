@@ -4,6 +4,7 @@ from typing import Any, Optional, Tuple
 
 import torch
 
+from sglang.srt.environ import envs
 from sglang.srt.layers.deep_gemm_wrapper import compile_utils
 from sglang.srt.layers.deep_gemm_wrapper.configurer import (  # noqa: F401
     DEEPGEMM_BLACKWELL,
@@ -11,15 +12,18 @@ from sglang.srt.layers.deep_gemm_wrapper.configurer import (  # noqa: F401
     ENABLE_JIT_DEEPGEMM,
 )
 from sglang.srt.server_args import ServerArgs
-from sglang.srt.utils import get_bool_env_var
+from sglang.srt.utils import is_musa
 
 logger = logging.getLogger(__name__)
 
 if ENABLE_JIT_DEEPGEMM:
-    import deep_gemm
-    from deep_gemm.utils.layout import get_mn_major_tma_aligned_tensor  # noqa: F401
+    if is_musa():
+        import mate.deep_gemm as deep_gemm
+    else:
+        import deep_gemm
+        from deep_gemm.utils.layout import get_mn_major_tma_aligned_tensor  # noqa: F401
 
-_SANITY_CHECK = get_bool_env_var("SGLANG_DEEPGEMM_SANITY_CHECK")
+_SANITY_CHECK = envs.SGLANG_DEEPGEMM_SANITY_CHECK.get()
 
 
 # TODO maybe rename these functions

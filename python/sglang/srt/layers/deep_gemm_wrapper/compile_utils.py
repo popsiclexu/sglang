@@ -14,12 +14,17 @@ from sglang.srt.distributed.device_communicators.pynccl_allocator import (
 from sglang.srt.environ import envs
 from sglang.srt.layers.deep_gemm_wrapper.configurer import ENABLE_JIT_DEEPGEMM
 from sglang.srt.server_args import ServerArgs
-from sglang.srt.utils import ceil_div, get_available_gpu_memory
+from sglang.srt.utils import ceil_div, get_available_gpu_memory, is_musa
 
 logger = logging.getLogger(__name__)
 
+_is_musa = is_musa()
+
 if ENABLE_JIT_DEEPGEMM:
-    import deep_gemm
+    if _is_musa:
+        import mate.deep_gemm as deep_gemm
+    else:
+        import deep_gemm
 
 
 _BUILTIN_M_LIST = list(range(1, 1024 * 16 + 1))
@@ -336,6 +341,6 @@ class _BF16F32WarmupExecutor(_BaseWarmupExecutor):
 def deep_gemm_execution_hook(
     m: int, n: int, k: int, num_groups: int, kernel_type: DeepGemmKernelType
 ):
-    if m > 0:
+    if m > 0 and not _is_musa:
         _maybe_compile_deep_gemm_one_type_all(kernel_type, n, k, num_groups)
     yield

@@ -1,18 +1,25 @@
 import logging
 
 from sglang.srt.environ import envs
-from sglang.srt.utils import get_device_sm, is_blackwell_supported
+from sglang.srt.utils import get_device_sm, is_blackwell_supported, is_musa
 
 logger = logging.getLogger(__name__)
+
+_is_musa = is_musa()
 
 
 def _compute_enable_deep_gemm():
     sm_version = get_device_sm()
+    if is_musa and sm_version < 31:
+        return False
     if sm_version < 90:
         return False
 
     try:
-        import deep_gemm  # noqa: F401
+        if _is_musa:
+            import mate.deep_gemm  # noqa: F401
+        else:
+            import deep_gemm  # noqa: F401
     except ImportError:
         return False
 

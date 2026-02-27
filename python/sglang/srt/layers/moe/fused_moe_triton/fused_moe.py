@@ -20,6 +20,7 @@ from sglang.srt.utils import (
     is_cpu,
     is_cuda,
     is_hip,
+    is_musa,
     is_xpu,
     use_intel_xpu_backend,
 )
@@ -44,6 +45,7 @@ _is_cpu = is_cpu()
 _use_aiter = get_bool_env_var("SGLANG_USE_AITER") and _is_hip
 _is_xpu = is_xpu()
 _use_sgl_xpu = use_intel_xpu_backend()
+_is_musa = is_musa()
 
 if _is_cuda:
     from sgl_kernel import gelu_and_mul, moe_sum_reduce, silu_and_mul
@@ -61,6 +63,10 @@ elif _is_hip:
     # because the code uses moe_sum_reduce_triton as fallback (line 619)
 elif _is_xpu:
     from sgl_kernel import moe_sum_reduce, silu_and_mul
+elif _is_musa:
+    from sgl_kernel import moe_sum_reduce
+
+    from sglang.srt.layers.activation import GeluAndMul, SiluAndMul
 
 # Try to import vllm_ops for non-CUDA/HIP/XPU platforms
 _has_vllm_ops = False
@@ -457,11 +463,13 @@ def fused_experts_impl(
         intermediate_cache1 = cache[: total_tokens * N].view(
             (total_tokens, N),
         )
-        intermediate_cache2 = torch.empty(
-            (total_tokens, N // 2),
-            device=hidden_states.device,
-            dtype=hidden_states.dtype,
-        )
+
+        if not _is_musa:
+            intermediate_cache2 = torch.empty(
+                (total_tokens, N // 2),
+                device=hidden_states.device,
+                dtype=hidden_states.dtype,
+            )
 
         curr_topk_ids = topk_ids[begin_chunk_idx:end_chunk_idx]
         curr_topk_weights = topk_weights[begin_chunk_idx:end_chunk_idx]
@@ -523,6 +531,8 @@ def fused_experts_impl(
                         down_moe_use_tma,
                         activation,
                     )
+            elif _is_musa:
+                intermediate_cache2 = SiluAndMul()(intermediate_cache1.view(-1, N))
             else:
                 if _has_vllm_ops:
                     vllm_ops.silu_and_mul(
@@ -549,6 +559,8 @@ def fused_experts_impl(
                         down_moe_use_tma,
                         activation,
                     )
+            elif _is_musa:
+                intermediate_cache2 = GeluAndMul()(intermediate_cache1.view(-1, N))
             else:
                 if _has_vllm_ops:
                     vllm_ops.gelu_and_mul(
@@ -606,7 +618,7 @@ def fused_experts_impl(
 
         if no_combine:
             pass
-        elif _is_cuda:
+        elif _is_cuda or _is_musa:
             if topk_ids.shape[1] == 1 and routed_scaling_factor == 1.0:
                 pass  # we write directly into out_hidden_states
             elif topk_ids.shape[1] == 2 and routed_scaling_factor == 1.0:

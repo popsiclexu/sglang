@@ -95,6 +95,9 @@ class SiluAndMul(MultiPlatformOp):
         silu_and_mul(x, out)
         return out
 
+    def forward_musa(self, x: torch.Tensor) -> torch.Tensor:
+        return nn.SwishGLU()(x)
+
 
 class GeluAndMul(MultiPlatformOp):
     def __init__(self, approximate="tanh"):

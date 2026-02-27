@@ -39,6 +39,7 @@ from sglang.srt.utils import (
     is_cuda,
     is_flashinfer_available,
     is_hip,
+    is_musa,
     is_sm90_supported,
     is_sm100_supported,
     offloader,
@@ -49,6 +50,10 @@ logger = logging.getLogger(__name__)
 _is_hip = is_hip()
 _is_cuda = is_cuda()
 _is_fp8_fnuz = is_fp8_fnuz()
+_is_musa = is_musa()
+
+if _is_musa:
+    from sgl_kernel import musa_fused_gemv, musa_mudnn_w8a8_scaled_mm
 
 _use_aiter = get_bool_env_var("SGLANG_USE_AITER") and _is_hip
 
@@ -268,7 +273,7 @@ def _dispatch_auto_backend() -> Callable:
     # 4. AITER (if AMD GPU with AITER enabled)
     # 5. Triton (fallback)
 
-    if deep_gemm_wrapper.ENABLE_JIT_DEEPGEMM:
+    if deep_gemm_wrapper.ENABLE_JIT_DEEPGEMM and not _is_musa:
         return deepgemm_w8a8_block_fp8_linear_with_fallback
     elif is_blackwell_supported() and is_flashinfer_available():
         return flashinfer_gemm_w8a8_block_fp8_linear_with_fallback
@@ -276,6 +281,8 @@ def _dispatch_auto_backend() -> Callable:
         return cutlass_w8a8_block_fp8_linear_with_fallback
     elif _use_aiter:
         return aiter_w8a8_block_fp8_linear
+    elif _is_musa:
+        return musa_w8a8_block_fp8_linear
     else:
         return triton_w8a8_block_fp8_linear
 
@@ -608,6 +615,40 @@ def triton_w8a8_block_fp8_linear(
     output = w8a8_block_fp8_matmul_triton(
         q_input, weight, x_scale, weight_scale, block_size, output_dtype=input_2d.dtype
     )
+    if bias is not None:
+        output += bias
+    return output.to(dtype=input_2d.dtype).view(*output_shape)
+
+
+def musa_w8a8_block_fp8_linear(
+    input: torch.Tensor,
+    weight: torch.Tensor,
+    block_size: List[int],
+    weight_scale: torch.Tensor,
+    input_scale: Optional[torch.Tensor] = None,
+    bias: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    assert input_scale is None
+    input_2d = input.view(-1, input.shape[-1])
+    output_shape = [*input.shape[:-1], weight.shape[0]]
+    if input_2d.shape[0] < 4:
+        output = musa_fused_gemv(
+            input_2d,
+            weight,
+            None,
+            weight_scale,
+        )
+    else:
+        q_input, x_scale = sglang_per_token_group_quant_fp8(
+            input_2d, block_size[1], column_major_scales=False
+        )
+        output = musa_mudnn_w8a8_scaled_mm(
+            q_input,
+            weight,
+            out_dtype=input_2d.dtype,
+            scale_a=x_scale,
+            scale_b=weight_scale,
+        )
     if bias is not None:
         output += bias
     return output.to(dtype=input_2d.dtype).view(*output_shape)
