@@ -1076,7 +1076,7 @@ class DeepseekV2MoE(nn.Module):
                 shared_output = self._forward_shared_experts(hidden_states)
                 for handle in deepep_combine_hook_handle:
                     handle.remove()
-            
+
             assert isinstance(self.experts.dispatcher, MaybeTboDeepEPDispatcher)
             deepep_combine_hook_handle = (
                 self.experts.dispatcher.register_deepep_combine_hook(
@@ -2811,12 +2811,14 @@ class DeepseekV2DecoderLayer(nn.Module):
 
         self.is_layer_sparse = self._is_layer_sparse(layer_id, is_nextn=is_nextn)
         is_previous_layer_sparse = self._is_layer_sparse(layer_id - 1, is_nextn=False)
+        is_next_layer_sparse = self._is_layer_sparse(layer_id + 1, is_nextn=False)
 
         self.layer_scatter_modes = LayerScatterModes.init_new(
             layer_id=layer_id,
             num_layers=1 if is_nextn else config.num_hidden_layers,
             is_layer_sparse=self.is_layer_sparse,
             is_previous_layer_sparse=is_previous_layer_sparse,
+            is_next_layer_sparse=is_next_layer_sparse,
         )
 
         if self.is_layer_sparse:
