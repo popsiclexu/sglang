@@ -286,7 +286,11 @@ class EAGLEWorker(TpModelWorker):
                 self.draft_model_runner.tp_group
             ), speculative_moe_backend_context(), speculative_moe_a2a_backend_context():
                 self.forward_draft_extend(
-                    batch, logits_output.hidden_states, next_token_ids, seq_lens_cpu
+                    batch,
+                    logits_output.hidden_states,
+                    next_token_ids,
+                    seq_lens_cpu,
+                    logits_output.mm_input_embeds,
                 )
             return GenerationBatchResult(
                 logits_output=logits_output,
@@ -882,6 +886,7 @@ class EAGLEWorker(TpModelWorker):
         hidden_states: torch.Tensor,
         next_token_ids: torch.Tensor,
         seq_lens_cpu: Optional[torch.Tensor],
+        mm_input_embeds: Optional[torch.Tensor] = None,
     ):
         """Run draft model extend. This API modifies the states of the batch.
 
@@ -906,7 +911,9 @@ class EAGLEWorker(TpModelWorker):
             model_worker_batch, self.draft_model_runner
         )
         forward_batch.return_logprob = False
-        logits_output, _ = self.draft_model_runner.forward(forward_batch)
+        if mm_input_embeds is not None:
+            forward_batch.mm_input_embeds = mm_input_embeds
+        logits_output = self.draft_model_runner.forward(forward_batch).logits_output
         if self.enable_nan_detection:
             detect_nan(logits_output)
         assert isinstance(forward_batch.spec_info, EagleDraftInput)

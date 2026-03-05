@@ -15,7 +15,7 @@
 
 import dataclasses
 import logging
-from typing import List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
 import triton
@@ -102,6 +102,11 @@ class LogitsProcessorOutput:
     ## Part 4: Diffusion LLM only.
     full_logits: Optional[torch.Tensor] = None
 
+    ## Part 5: Customized Info
+    customized_info: Optional[Dict[str, List[Any]]] = None
+
+    mm_input_embeds: Optional[torch.Tensor] = None
+
 
 @dataclasses.dataclass
 class LogitsMetadata:
@@ -143,6 +148,8 @@ class LogitsMetadata:
 
     # Whether this batch is prefill-only (no token generation needed)
     is_prefill_only: bool = False
+
+    mm_input_embeds: Optional[torch.Tensor] = None
 
     @classmethod
     def from_forward_batch(cls, forward_batch: ForwardBatch):
@@ -194,6 +201,7 @@ class LogitsMetadata:
             global_num_tokens_for_logprob_cpu=forward_batch.global_num_tokens_for_logprob_cpu,
             global_num_tokens_for_logprob_gpu=forward_batch.global_num_tokens_for_logprob_gpu,
             dp_padding_mode=DpPaddingMode.SUM_LEN,
+            mm_input_embeds=forward_batch.mm_input_embeds,
         )
 
     def compute_dp_attention_metadata(self):
