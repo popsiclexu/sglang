@@ -546,6 +546,7 @@ def pre_permute_standard_to_deep_gemm(
             hidden_states,
             runner_config.top_k,
             quant_info.block_shape,
+            output_dtype=hidden_states_dtype,
         )
     )
 
