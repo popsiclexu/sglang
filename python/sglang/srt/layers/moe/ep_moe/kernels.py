@@ -1215,7 +1215,7 @@ def moe_ep_deepgemm_preprocess(
         block_shape = [128, 128]
     assert len(block_shape) == 2
     block_n, block_k = block_shape[0], block_shape[1]
-    is_fp8 = hidden_states.dtype == torch.float8_e4m3fn
+    is_fp8 = output_dtype == torch.float8_e4m3fn
     if is_fp8:
         # TODO: fuse this with the preprocess
         hidden_states, scale = per_token_group_quant_fp8(hidden_states, block_k)
