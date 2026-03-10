@@ -442,6 +442,7 @@ def apply_topk_weights_cpu(need_apply, topk_weights, inputs):
     return inputs, topk_weights
 
 
+@torch.compile(dynamic=True, backend=get_compiler_backend(), disable=not _is_musa)
 def fused_topk(
     hidden_states: torch.Tensor,
     gating_output: torch.Tensor,
