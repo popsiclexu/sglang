@@ -5,6 +5,9 @@ import triton
 import triton.language as tl
 
 from sglang.srt.layers.attention.fla.utils import input_guard
+from sglang.srt.utils import is_musa
+
+_is_musa = is_musa()
 
 
 @triton.jit(do_not_specialize=["T"])
@@ -185,7 +188,7 @@ def fused_sigmoid_gating_delta_rule_update(
     NK, NV = triton.cdiv(K, BK), triton.cdiv(V, BV)
     assert NK == 1, "NK > 1 is not supported yet"
     num_stages = 3
-    num_warps = 1
+    num_warps = 1 if not _is_musa else 4
 
     if scale is None:
         scale = k.shape[-1] ** -0.5

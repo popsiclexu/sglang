@@ -8,6 +8,9 @@ import torch
 import triton
 import triton.language as tl
 
+from sglang.srt.utils import is_musa
+
+_is_musa = is_musa()
 PAD_SLOT_ID = -1
 
 
@@ -1107,6 +1110,13 @@ def causal_conv1d_update(
     else:
         stride_retrieve_parent_token_seq = stride_retrieve_parent_token_token = 0
 
+    BLOCK_N = 256
+    kwargs = {}
+    if _is_musa:
+        BLOCK_N = 128
+        kwargs["num_warps"] = 4
+        kwargs["num_stages"] = 1
+
     _causal_conv1d_update_kernel[grid](
         # Pointers to matrices
         x,
@@ -1161,9 +1171,10 @@ def causal_conv1d_update(
         NP2_STATELEN=np2_statelen,
         NP2_SEQLEN=np2_seqlen,
         USE_PAD_SLOT=pad_slot_id is not None,
-        BLOCK_N=256,
+        BLOCK_N=BLOCK_N,
         SAVE_INTERMEDIATE=intermediate_conv_window is not None,
         HAS_EAGLE_TREE_CUSTOM_ATTN_MASK=retrieve_next_token is not None,
+        **kwargs,
     )
     if unsqueeze:
         out = out.squeeze(-1)
