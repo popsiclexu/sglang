@@ -203,8 +203,35 @@ def fp8_index(
     pass_configs={
         tilelang.PassConfigKey.TL_DISABLE_TMA_LOWER: True,
         tilelang.PassConfigKey.TL_DISABLE_WARP_SPECIALIZED: True,
+        tilelang.PassConfigKey.TL_ENABLE_FAST_MATH: True,
+        #tilelang.PassConfigKey.TL_DISABLE_THREAD_STORAGE_SYNC: True,
+        #tilelang.PassConfigKey.TL_ENABLE_MUSA_BURST: True,
+        tilelang.PassConfigKey.TL_ENABLE_REDUCE_BURST: False,
     },
-)
+    compile_flags=[
+        #"-Od3",
+        "-fmusa-flush-denormals-to-zero",
+        "-mllvm",
+        "-misched=mtgpu-max-ilp",
+        "-mllvm",
+        "-mtgpu-if-convert=1",
+        "-mllvm",
+        "-mtgpu-tiny-offset-hint=1",
+        "-mllvm",
+        "-mtgpu-enable-postra-sched=0",
+        "-mllvm",
+        "-misched-recompute-slotindex=1",
+        "-mllvm",
+        "-mtgpu-combine-instr-with-burst=1",
+        "-mllvm",
+        "-mtgpu-combine-fop-instr=1",
+        "-fno-signed-zeros",
+        "-fno-strict-aliasing",
+        "-mllvm",
+        "-mtgpu-load-cluster-mutation=1",
+        "-mllvm",
+        "--num-dwords-of-load-in-mutation=64",
+    ])
 def sparse_attention_fwd_kernel_v1(
     num_heads,
     dim,
@@ -214,9 +241,9 @@ def sparse_attention_fwd_kernel_v1(
     kv_group=1,
     sm_scale=None,
     is_causal=True,
-    block_I=32, # NOTICE(MUSA): change from 64 to 32 because of share memory malloc failed problem.
-    num_stages=2,
-    threads=256,
+    block_I=64,
+    num_stages=0,
+    threads=512,
 ):
     assert dim == tilelang.math.next_power_of_2(
         dim
@@ -247,8 +274,7 @@ def sparse_attention_fwd_kernel_v1(
     accum_dtype = "float"
 
     H = head_kv
-    # NOTICE(MUSA): change from 16 to 32 because of pure TP will be failed.
-    padded_H = max(tilelang.math.next_power_of_2(head_kv), 32)
+    padded_H = max(tilelang.math.next_power_of_2(head_kv), 64)
     if padded_H != H:
         assert kv_group == 1
     BI = block_I
@@ -264,9 +290,6 @@ def sparse_attention_fwd_kernel_v1(
 
     H_per_block = padded_H if REPLICATE_H == 1 else 64
 
-    num_stages = 0
-    threads = 128
-
     @T.prim_func
     def main(
         Q: T.Tensor(q_shape, dtype),  # type: ignore
@@ -281,8 +304,7 @@ def sparse_attention_fwd_kernel_v1(
         ):
             Q_shared = T.alloc_shared([H_per_block, D], dtype)
             Q_tail_shared = T.alloc_shared([H_per_block, D_tail], dtype)
-            KV_shared_qk = T.alloc_shared([BI, D], dtype)
-            KV_shared_vo = T.alloc_shared([BI, D], dtype)
+            KV_shared = T.alloc_shared([BI, D], dtype)
             K_tail_shared = T.alloc_shared([BI, D_tail], dtype)
             mask = T.alloc_fragment([BI], "bool")
 
@@ -302,25 +324,29 @@ def sparse_attention_fwd_kernel_v1(
             b_i, g_i = by, bz
             s_i = bx if REPLICATE_H == 1 else (bx // REPLICATE_H)
             q_i = s_i
+            max_kv_i = q_i
 
             H0 = g_i * padded_H + (0 if REPLICATE_H == 1 else (bx % REPLICATE_H) * 64)
             H1 = H0 + H_per_block
 
-            T.copy(Q[b_i, s_i, H0:H1, :D], Q_shared)
-            T.copy(Q[b_i, s_i, H0:H1, D:], Q_tail_shared)
+            T.copy(Q[b_i, s_i, H0:H1, :D], Q_shared, force_async_copy=True)
+            T.copy(Q[b_i, s_i, H0:H1, D:], Q_tail_shared, force_async_copy=True)
 
             for i_i in T.Pipelined(NI, num_stages=num_stages):
 
                 for bi_i in T.Parallel(BI):
                     mask[bi_i] = Indices[b_i, s_i, g_i, i_i * BI + bi_i] >= 0
 
+                T.annotate_layout(
+                    {
+                        KV_shared:
+                            tilelang.layout.make_sqmma_swizzled_layout(KV_shared, k_major=True)
+                    },
+                    allow_reannotation=True,
+                )
                 for bi_i, d_i in T.Parallel(BI, D):
-                    KV_shared_qk[bi_i, d_i] = KV[
-                        b_i, Indices[b_i, s_i, g_i, i_i * BI + bi_i], g_i, d_i
-                    ]
-                    KV_shared_vo[bi_i, d_i] = KV[
-                        b_i, Indices[b_i, s_i, g_i, i_i * BI + bi_i], g_i, d_i
-                    ]
+                    KV_shared[bi_i, d_i] = KV[
+                        b_i, Indices[b_i, s_i, g_i, i_i * BI + bi_i], g_i, d_i]
                 for bi_i, d_i in T.Parallel(BI, D_tail):
                     K_tail_shared[bi_i, d_i] = KV[
                         b_i, Indices[b_i, s_i, g_i, i_i * BI + bi_i], g_i, D + d_i
@@ -332,17 +358,17 @@ def sparse_attention_fwd_kernel_v1(
                     )
                 T.gemm(
                     Q_shared,
-                    KV_shared_qk,
+                    KV_shared,
                     acc_s,
                     transpose_B=True,
-                    policy=T.GemmWarpPolicy.FullCol,
+                    policy=T.GemmWarpPolicy.FullRow,
                 )
                 T.gemm(
                     Q_tail_shared,
                     K_tail_shared,
                     acc_s,
                     transpose_B=True,
-                    policy=T.GemmWarpPolicy.FullCol,
+                    policy=T.GemmWarpPolicy.FullRow,
                 )
                 T.copy(m_i, m_i_prev)
                 T.reduce_max(acc_s, m_i, dim=1, clear=False)
@@ -359,7 +385,19 @@ def sparse_attention_fwd_kernel_v1(
                     acc_o[h_i, d_i] = acc_o[h_i, d_i] * alpha[h_i]
 
                 T.copy(acc_s, S_shared)
-                T.gemm(S_shared, KV_shared_vo, acc_o, policy=T.GemmWarpPolicy.FullCol)
+                T.annotate_layout(
+                    {
+                        KV_shared:
+                            tilelang.layout.make_sqmma_swizzled_layout(
+                                KV_shared, continuity=64, k_major=False)
+                    },
+                    allow_reannotation=True,
+                )
+                for bi_i, d_i in T.Parallel(BI, D):
+                    KV_shared[bi_i, d_i] = KV[
+                        b_i, Indices[b_i, s_i, g_i, i_i * BI + bi_i], g_i, d_i
+                    ]
+                T.gemm(S_shared, KV_shared, acc_o, policy=T.GemmWarpPolicy.FullRow)
 
             # Rescale
             for h_i, d_i in T.Parallel(H_per_block, D):
@@ -783,7 +821,7 @@ def tilelang_sparse_fwd(
     assert topk == 2048
     if _is_hip or _is_musa:
         kernel = sparse_attention_fwd_kernel_v1(
-            num_heads, d_v, tail_dim, topk, sm_scale=sm_scale, num_stages=1
+            num_heads, d_v, tail_dim, topk, sm_scale=sm_scale, num_stages=0
         )
     else:
         kernel = sparse_attention_fwd_kernel_v2(
