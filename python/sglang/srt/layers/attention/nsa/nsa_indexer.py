@@ -15,10 +15,7 @@ _is_musa = is_musa()
 
 if _is_cuda or _is_musa:
     try:
-        if not _is_musa:
-            import mate.deep_gemm as deep_gemm
-        else:
-            import deep_gemm
+        import deep_gemm
     except ImportError as e:
         deep_gemm = e
 
