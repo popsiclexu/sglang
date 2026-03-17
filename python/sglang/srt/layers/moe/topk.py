@@ -81,6 +81,9 @@ if _is_cuda or _is_musa:
     except ImportError as e:
         pass
 
+if _is_musa:
+    from mate import moe_fused_gate as mate_moe_fused_gate
+
 if _is_cuda or _is_hip or _is_musa:
     from sgl_kernel import topk_softmax
 
@@ -744,7 +747,7 @@ def biased_grouped_topk_gpu(
 ):
     # TODO: moe_fused_gate kernel is not supported for num_fused_shared_experts > 0 now.
     if (
-        (_is_cuda or _is_musa)
+        _is_cuda
         and gating_output.shape[1] // num_expert_group
         <= 32  # moe_fused_gate kernel ensure that num_experts/num_expert_group does not exceed MAX_VPT=32 now. And when kernel can handle MAX_VPT > 32, we can remove this assertion.
         and is_power_of_two(correction_bias.shape[0])
@@ -759,6 +762,36 @@ def biased_grouped_topk_gpu(
             routed_scaling_factor if routed_scaling_factor is not None else 1.0,
             apply_routed_scaling_factor_on_output,
         )
+        # TODO merge into kernel
+        if (expert_location_dispatch_info is not None) or (
+            num_token_non_padded is not None
+        ):
+            topk_ids = _biased_grouped_topk_postprocess(
+                topk_ids, expert_location_dispatch_info, num_token_non_padded
+            )
+        return topk_weights, topk_ids
+    elif (
+        _is_musa
+        and (
+            gating_output.shape[1] // num_expert_group <= 32
+            or (
+                num_expert_group == 1 and gating_output.shape[1] in {160, 256, 384}
+            )  # XXX (MUSA): will support more cases in the future
+        )
+        and is_power_of_two(correction_bias.shape[0])
+    ):
+        topk_weights, topk_ids = mate_moe_fused_gate(
+            gating_output.to(dtype=torch.float32),
+            correction_bias,
+            num_expert_group,
+            topk_group,
+            topk,
+            num_fused_shared_experts,
+            routed_scaling_factor if routed_scaling_factor is not None else 1.0,
+            renormalize,
+            apply_routed_scaling_factor_on_output,
+        )
+
         # TODO merge into kernel
         if (expert_location_dispatch_info is not None) or (
             num_token_non_padded is not None
