@@ -34,6 +34,7 @@ from sglang.srt.configs.qwen3_5 import (
 # Distributed
 from sglang.srt.distributed import get_pp_group, get_pp_indices
 from sglang.srt.eplb.expert_distribution import get_global_expert_distribution_recorder
+from sglang.srt.eplb.expert_location import ModelConfigForExpertLocation
 
 # Layers - Attention
 from sglang.srt.layers.attention.fla.layernorm_gated import RMSNorm as RMSNormGated
@@ -1187,6 +1188,15 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3VLForConditionalGeneration):
             self.lm_head.weight = head
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
+
+    @classmethod
+    def get_model_config_for_expert_location(cls, config):
+        text_config = getattr(config, "text_config", config)
+        return ModelConfigForExpertLocation(
+            num_layers=text_config.num_hidden_layers,
+            num_logical_experts=text_config.num_experts,
+            num_groups=None,
+        )
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
         stacked_params_mapping = [
