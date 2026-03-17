@@ -1076,7 +1076,7 @@ class DeepseekV2MoE(nn.Module):
                 shared_output = self._forward_shared_experts(hidden_states)
                 for handle in deepep_combine_hook_handle:
                     handle.remove()
-            
+
             assert isinstance(self.experts.dispatcher, MaybeTboDeepEPDispatcher)
             deepep_combine_hook_handle = (
                 self.experts.dispatcher.register_deepep_combine_hook(

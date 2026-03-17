@@ -15,10 +15,7 @@ def _compute_enable_deep_gemm():
         return False
 
     try:
-        if not is_musa():
-            import deep_gemm  # noqa: F401
-        else:
-            import mate.deep_gemm  # noqa: F401
+        import deep_gemm  # noqa: F401
     except ImportError:
         return False
 

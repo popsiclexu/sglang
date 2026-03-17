@@ -11,8 +11,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional, Tuple, Union
 
 import torch
-from mate import flash_attn_with_kvcache as _mate_flash_attn_with_kvcache
-from mate.mha_interface import get_scheduler_metadata
+from flash_attn import flash_attn_with_kvcache as _mate_flash_attn_with_kvcache
+from flash_attn import get_scheduler_metadata
 
 from sglang.srt.distributed import get_pp_group, get_pp_indices
 from sglang.srt.environ import envs
@@ -152,7 +152,8 @@ def _compute_scheduler_metadata(
                 headdim_v=layer.v_head_dim,
                 cache_seqlens=cache_seqlens,
                 cu_seqlens_q=cu_seqlens_q,
-                cu_seqlens_k_new=cu_seqlens_k_new,
+                # XXX (MUSA): cu_seqlens_k_new is not supported on MATE v0.1.2
+                # cu_seqlens_k_new=cu_seqlens_k_new,
                 max_seqlen_q=max_seqlen_q,
                 max_seqlen_k=ctx.max_seqlen_k,
                 page_size=page_size,
@@ -232,7 +233,8 @@ def flash_attn_with_kvcache(
         cache_leftpad=cache_leftpad,
         page_table=page_table,
         cu_seqlens_q=cu_seqlens_q,
-        cu_seqlens_k_new=cu_seqlens_k_new,
+        # XXX (MUSA): cu_seqlens_k_new is not supported on MATE v0.1.2
+        # cu_seqlens_k_new=cu_seqlens_k_new,
         max_seqlen_q=max_seqlen_q,
         rotary_seqlens=rotary_seqlens,
         q_descale=q_descale,

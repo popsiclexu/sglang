@@ -68,6 +68,7 @@ class DeepEPPDispatchHooks(DispatcherBaseHooks):
         for hook_fun in self.hook_dict.values():
             hook_fun(dispatcher)
 
+
 class DeepEPPCombineHooks(DispatcherBaseHooks):
 
     def __call__(self, dispatcher: BaseDispatcher):
@@ -888,6 +889,6 @@ class DeepEPDispatcher(BaseDispatcher):
 
     def register_deepep_dispatch_hook(self, hook):
         return self._deepep_dispatch_hooks.register_hook(hook)
-    
+
     def register_deepep_combine_hook(self, hook):
         return self._deepep_combine_hooks.register_hook(hook)

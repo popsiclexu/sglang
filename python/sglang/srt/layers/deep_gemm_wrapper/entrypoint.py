@@ -17,10 +17,7 @@ from sglang.srt.utils import get_bool_env_var, is_musa
 logger = logging.getLogger(__name__)
 
 if ENABLE_JIT_DEEPGEMM:
-    if not is_musa():
-        import deep_gemm
-    else:
-        import mate.deep_gemm as deep_gemm
+    import deep_gemm
 
 _SANITY_CHECK = get_bool_env_var("SGLANG_DEEPGEMM_SANITY_CHECK")
 
