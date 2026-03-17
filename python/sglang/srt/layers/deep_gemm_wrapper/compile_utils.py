@@ -24,10 +24,7 @@ from sglang.srt.utils import (
 logger = logging.getLogger(__name__)
 
 if ENABLE_JIT_DEEPGEMM:
-    if not is_musa():
-        import deep_gemm
-    else:
-        import mate.deep_gemm as deep_gemm
+    import deep_gemm
 
 
 _BUILTIN_M_LIST = list(range(1, 1024 * 16 + 1))

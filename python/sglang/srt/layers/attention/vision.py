@@ -18,6 +18,7 @@ from sglang.srt.utils import (
     is_blackwell,
     is_cuda,
     is_hip,
+    is_musa,
     is_npu,
     print_info_once,
 )
@@ -25,9 +26,13 @@ from sglang.srt.utils import (
 _is_cuda = is_cuda()
 _is_npu = is_npu()
 _is_hip = is_hip()
+_is_musa = is_musa()()
 
 if _is_cuda:
     from sgl_kernel.flash_attn import flash_attn_varlen_func
+
+if _is_musa:
+    from flash_attn import flash_attn_varlen_func
 
 if _is_npu:
     import torch_npu
@@ -315,8 +320,8 @@ class VisionFlash3Attention(nn.Module):
         self,
         **kwargs,
     ):
-        if not _is_cuda:
-            raise Exception("VisionFlash3Attention is only available for cuda")
+        if not (_is_cuda or _is_musa):
+            raise Exception("VisionFlash3Attention is only available for cuda or musa")
         super().__init__()
 
     def forward(

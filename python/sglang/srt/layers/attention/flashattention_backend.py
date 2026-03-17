@@ -28,7 +28,7 @@ if not _is_musa:
     from sgl_kernel.flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
 
 else:
-    from mate import flash_attn_varlen_func
+    from flash_attn import flash_attn_varlen_func
 
     from sglang.srt.hardware_backend.musa.attention import (
         FlashAttentionContext,
