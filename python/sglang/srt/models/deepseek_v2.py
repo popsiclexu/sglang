@@ -1786,7 +1786,6 @@ class DeepseekV2AttentionMLA(nn.Module):
 
         else:
             kv_a = self.kv_a_layernorm(kv_a)
-            kv = self.kv_b_proj(kv_a)[0]
 
         # kv_a = self.kv_a_layernorm(kv_a)
 
