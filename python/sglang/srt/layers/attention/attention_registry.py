@@ -208,9 +208,6 @@ def attn_backend_wrapper(runner: "ModelRunner", full_attn_backend: "AttentionBac
         )
         from sglang.srt.layers.attention.linear.gdn_backend import GDNAttnBackend
         from sglang.srt.layers.attention.linear.kda_backend import KDAAttnBackend
-        from sglang.srt.layers.attention.linear.lightning_backend import (
-            LightningAttentionBackend,
-        )
         from sglang.srt.layers.attention.linear.utils import (
             initialize_linear_attn_config,
         )
@@ -234,8 +231,6 @@ def attn_backend_wrapper(runner: "ModelRunner", full_attn_backend: "AttentionBac
             linear_attn_backend = Mamba2AttnBackend(runner)
         elif runner.kimi_linear_config is not None:
             linear_attn_backend = KDAAttnBackend(runner)
-        elif runner.hybrid_lightning_config is not None:
-            linear_attn_backend = LightningAttentionBackend(runner)
         else:
             raise ValueError(
                 "Expected hybrid GDN or NemotronH models, but got unknown model."

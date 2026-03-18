@@ -287,38 +287,11 @@ class Qwen3_5GatedDeltaNet(nn.Module):
         b = b.contiguous()
         a = a.contiguous()
 
-        conv_weights = self.conv1d.weight.view(
-            self.conv1d.weight.size(0), self.conv1d.weight.size(2)
-        )
-
-        kwargs = {
-            "mixed_qkv": mixed_qkv,
-            "conv_weights": conv_weights,
-            "bias": self.conv1d.bias,
-            "activation": self.activation,
-            "key_dim": self.key_dim,
-            "value_dim": self.value_dim,
-            "attention_tp_size": self.attn_tp_size,
-            "head_k_dim": self.head_k_dim,
-            "head_v_dim": self.head_v_dim,
-            "a": a,
-            "b": b,
-            "A_log": self.A_log,
-            "dt_bias": self.dt_bias,
-            "layer_id": self.layer_id,
-            "seq_len": seq_len,
-            "num_k_heads": self.num_k_heads,
-            "num_v_heads": self.num_v_heads,
-            "z": z,
-        }
-
-        core_attn_out = forward_batch.attn_backend.forward(
-            q=None,
-            k=None,
-            v=None,
-            layer=None,
+        core_attn_out = self.attn.forward(
             forward_batch=forward_batch,
-            **kwargs,
+            mixed_qkv=mixed_qkv,
+            a=a,
+            b=b,
         )
 
         z_shape_og = z.shape
