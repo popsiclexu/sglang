@@ -335,7 +335,7 @@ class SchedulerRuntimeCheckerMixin:
             # Print batch size and memory pool info to check whether there are de-sync issues.
             if self.is_hybrid_swa:
                 _, info_msg = self._check_hybrid_memory()
-            elif self.is_ssm_model and isinstance(self.tree_cache, MambaRadixCache):
+            elif self.is_hybrid_ssm and isinstance(self.tree_cache, MambaRadixCache):
                 _, info_msg = self._check_mamba_memory()
             else:
                 _, info_msg = self._check_radix_cache_memory()
