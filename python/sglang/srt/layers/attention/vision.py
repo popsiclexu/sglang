@@ -26,7 +26,7 @@ from sglang.srt.utils import (
 _is_cuda = is_cuda()
 _is_npu = is_npu()
 _is_hip = is_hip()
-_is_musa = is_musa()()
+_is_musa = is_musa()
 
 if _is_cuda:
     from sgl_kernel.flash_attn import flash_attn_varlen_func
