@@ -112,7 +112,7 @@ def grouped_gemm_nt_f8f8bf16_contig(
     _sanity_check_input(rhs)
 
     with compile_utils.deep_gemm_execution_hook(m, n, k, num_groups, kernel_type):
-        kwargs = {"block_m": DEEPGEMM_BLOCK_M} if _is_musa else {}
+        kwargs = {"alignment_m": DEEPGEMM_BLOCK_M} if _is_musa else {}
         deep_gemm.m_grouped_fp8_gemm_nt_contiguous(
             lhs,
             rhs,
