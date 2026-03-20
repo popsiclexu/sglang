@@ -37,6 +37,8 @@ from sglang.srt.configs import (
     KimiLinearConfig,
     NemotronH_Nano_VL_V2_Config,
     NemotronHConfig,
+    Qwen3_5Config,
+    Qwen3_5MoeConfig,
     Qwen3NextConfig,
 )
 from sglang.srt.configs.device_config import DeviceConfig
@@ -241,8 +243,10 @@ SGLANG_CI_SMALL_KV_SIZE = os.getenv("SGLANG_CI_SMALL_KV_SIZE", None)
 # Detect stragger ranks in model loading
 UNBALANCED_MODEL_LOADING_TIMEOUT_S = 480  # leave more time for post data processing
 
-# the ratio of mamba cache pool size to max_running_requests, it will be safe when it is larger than 2 (yizhang2077)
+# the ratio of mamba cache pool size to max_running_requests
 MAMBA_CACHE_SIZE_MAX_RUNNING_REQUESTS_RATIO = 3
+MAMBA_CACHE_V2_ADDITIONAL_RATIO_OVERLAP = 2
+MAMBA_CACHE_V2_ADDITIONAL_RATIO_NO_OVERLAP = 1
 
 logger = logging.getLogger(__name__)
 
@@ -265,6 +269,12 @@ class RankZeroFilter(logging.Filter):
         if record.levelno == logging.INFO:
             return self.is_rank_zero
         return True
+
+
+@dataclass
+class ModelRunnerOutput:
+    logits_output: Union[LogitsProcessorOutput, PPProxyTensors]
+    can_run_graph: bool
 
 
 class ModelRunner:
@@ -1453,14 +1463,9 @@ class ModelRunner:
         server_args = self.server_args
         assert config is not None
 
-        speculativa_ratio = (
-            0
-            if server_args.speculative_num_draft_tokens is None
-            else server_args.speculative_num_draft_tokens
-        )
         if (
             server_args.disable_radix_cache
-            or config.mamba2_cache_params.mamba_cache_per_req == 0
+            or server_args.max_mamba_cache_size is not None
         ):
             # with disable radix cache, sets the max_mamba_cache_size based on the max_running_requests
             if server_args.max_mamba_cache_size is None:
@@ -1468,7 +1473,25 @@ class ModelRunner:
                     server_args.max_mamba_cache_size = server_args.max_running_requests
                 else:
                     server_args.max_mamba_cache_size = 512
+            server_args.max_mamba_cache_size = server_args.max_mamba_cache_size // (
+                server_args.dp_size if server_args.enable_dp_attention else 1
+            )
         else:
+            assert config.mamba2_cache_params.mamba_cache_per_req > 0
+            # reserve the memory for the intermediate mamba states used for spec dec
+            if not self.spec_algorithm.is_none():
+                assert server_args.speculative_num_draft_tokens is not None
+                assert server_args.max_running_requests is not None
+
+                mamba_state_intermediate_size = (
+                    config.mamba2_cache_params.mamba_cache_per_req
+                    * server_args.max_running_requests
+                    * server_args.speculative_num_draft_tokens
+                )
+                total_rest_memory = total_rest_memory - (
+                    mamba_state_intermediate_size / (1 << 30)
+                )
+
             # allocate the memory based on the ratio between mamba state memory vs. full kv cache memory
             # solve the equations:
             # 1. mamba_state_memory + full_kv_cache_memory == total_rest_memory
@@ -1482,25 +1505,33 @@ class ModelRunner:
             server_args.max_mamba_cache_size = int(
                 (mamba_state_memory_raw * (1 << 30))
                 // config.mamba2_cache_params.mamba_cache_per_req
-                // (1 + speculativa_ratio)
             )
 
-        if self.hybrid_gdn_config is not None:
-            server_args.max_mamba_cache_size = server_args.max_mamba_cache_size // (
-                server_args.dp_size if server_args.enable_dp_attention else 1
-            )
         mamba_state_memory = (
             server_args.max_mamba_cache_size
             * config.mamba2_cache_params.mamba_cache_per_req
-            * (1 + speculativa_ratio)
             / (1 << 30)
         )
         return total_rest_memory - mamba_state_memory
 
     @property
-    def hybrid_gdn_config(self):
+    def qwen3_next_config(self):
         config = self.model_config.hf_config
-        if isinstance(config, Qwen3NextConfig | JetNemotronConfig | JetVLMConfig):
+        if isinstance(config, Qwen3NextConfig):
+            return config
+        return None
+
+    @property
+    def hybrid_gdn_config(self):
+        config = self.model_config.hf_config.get_text_config()
+        if isinstance(
+            config,
+            Qwen3NextConfig
+            | Qwen3_5Config
+            | Qwen3_5MoeConfig
+            | JetNemotronConfig
+            | JetVLMConfig,
+        ):
             return config
         return None
 
@@ -1686,11 +1717,18 @@ class ModelRunner:
             )
 
         if self.mambaish_config is not None:
-            ratio = (
-                MAMBA_CACHE_SIZE_MAX_RUNNING_REQUESTS_RATIO
-                if not self.server_args.disable_radix_cache
-                else 1
-            )
+            additional_ratio = 0
+            if (
+                self.server_args.enable_mamba_extra_buffer()
+                and not self.spec_algorithm.is_none()
+            ):
+                additional_ratio = MAMBA_CACHE_V2_ADDITIONAL_RATIO_NO_OVERLAP
+            else:
+                additional_ratio = MAMBA_CACHE_V2_ADDITIONAL_RATIO_OVERLAP
+            if self.server_args.disable_radix_cache:
+                ratio = 1
+            else:
+                ratio = MAMBA_CACHE_SIZE_MAX_RUNNING_REQUESTS_RATIO + additional_ratio
             max_num_reqs = min(
                 max_num_reqs, self.server_args.max_mamba_cache_size // ratio
             )
@@ -1792,11 +1830,13 @@ class ModelRunner:
                 self.req_to_token_pool = HybridReqToTokenPool(
                     size=max_num_reqs,
                     mamba_size=self.server_args.max_mamba_cache_size,
+                    mamba_spec_state_size=max_num_reqs,
                     max_context_len=self.model_config.context_len
                     + extra_max_context_len,
                     device=self.device,
                     enable_memory_saver=self.server_args.enable_memory_saver,
                     cache_params=config.mamba2_cache_params,
+                    enable_mamba_extra_buffer=self.server_args.enable_mamba_extra_buffer(),
                     speculative_num_draft_tokens=self.server_args.speculative_num_draft_tokens,
                 )
             else:
@@ -2483,7 +2523,10 @@ class ModelRunner:
             elif hasattr(layer, "attn"):
                 self.attention_layers.append(layer.attn)
             elif hasattr(layer, "linear_attn"):
-                self.attention_layers.append(layer.linear_attn)
+                if hasattr(layer.linear_attn, "attn"):
+                    self.attention_layers.append(layer.linear_attn.attn)
+                else:
+                    self.attention_layers.append(layer.linear_attn)
             # For InternVL model
             elif hasattr(layer, "attention"):
                 if hasattr(layer.attention, "attn"):
@@ -2650,7 +2693,7 @@ class ModelRunner:
         pp_proxy_tensors: Optional[PPProxyTensors] = None,
         reinit_attn_backend: bool = False,
         split_forward_count: int = 1,
-    ) -> Tuple[Union[LogitsProcessorOutput, PPProxyTensors], bool]:
+    ) -> ModelRunnerOutput:
         # XXX (MUSA): Draft worker should not record expert distribution, which maybe cause hang
         if self.is_draft_worker:
             return self._forward_raw(
@@ -2687,7 +2730,7 @@ class ModelRunner:
         pp_proxy_tensors: Optional[PPProxyTensors],
         reinit_attn_backend: bool = False,
         split_forward_count: int = 1,
-    ) -> Tuple[Union[LogitsProcessorOutput, PPProxyTensors], bool]:
+    ) -> ModelRunnerOutput:
         mode_check = (
             forward_batch.forward_mode.is_cpu_graph
             if self.device == "cpu"
@@ -2705,7 +2748,7 @@ class ModelRunner:
                 skip_attn_backend_init=skip_attn_backend_init,
                 pp_proxy_tensors=pp_proxy_tensors,
             )
-            return ret, can_run_graph
+            return ModelRunnerOutput(logits_output=ret, can_run_graph=can_run_graph)
 
         # For MLP sync
         if forward_batch.global_num_tokens_cpu is not None:
@@ -2753,7 +2796,7 @@ class ModelRunner:
         ):
             forward_batch.post_forward_mlp_sync_batch(ret)
 
-        return ret, can_run_graph
+        return ModelRunnerOutput(logits_output=ret, can_run_graph=can_run_graph)
 
     def _preprocess_logits(
         self, logits_output: LogitsProcessorOutput, sampling_info: SamplingBatchInfo
@@ -2839,7 +2882,9 @@ class ModelRunner:
     def model_is_mrope(self) -> bool:
         """Detect if the model has "mrope" rope_scaling type.
         mrope requires keep "rope_deltas" between prompt and decoding phases."""
-        rope_scaling = getattr(self.model_config.hf_text_config, "rope_scaling", {})
+        rope_scaling = getattr(
+            self.model_config.hf_text_config, "rope_parameters", None
+        ) or getattr(self.model_config.hf_text_config, "rope_scaling", {})
         if rope_scaling is None:
             return False
         is_mrope_enabled = "mrope_section" in rope_scaling

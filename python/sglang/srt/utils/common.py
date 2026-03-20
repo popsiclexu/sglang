@@ -990,6 +990,8 @@ def load_video(video_file: Union[str, bytes], use_gpu: bool = True):
                 tmp_file.write(video_bytes)
                 tmp_file.close()
                 vr = VideoReader(tmp_file.name, ctx=ctx)
+        elif isinstance(video_file, (list, tuple, torch.Tensor, np.ndarray)):
+            vr = video_file
         else:
             raise ValueError(f"Unsupported video input type: {type(video_file)}")
 
@@ -2550,6 +2552,11 @@ def set_cuda_arch():
         os.environ["FLASHINFER_CUDA_ARCH_LIST"] = (
             f"{arch}{'a' if capability[0] >= 9 else ''}"
         )
+
+
+def cdiv(a: int, b: int) -> int:
+    """Ceiling division."""
+    return -(a // -b)
 
 
 def next_power_of_2(n: int):

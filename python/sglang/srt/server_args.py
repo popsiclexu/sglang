@@ -29,6 +29,7 @@ import orjson
 from sglang.srt.connector import ConnectorType
 from sglang.srt.environ import ToolStrictLevel, envs
 from sglang.srt.function_call.function_call_parser import FunctionCallParser
+from sglang.srt.layers.attention.fla.chunk_delta_h import CHUNK_SIZE as FLA_CHUNK_SIZE
 from sglang.srt.lora.lora_registry import LoRARef
 from sglang.srt.parser.reasoning_parser import ReasoningParser
 from sglang.srt.utils.common import (
@@ -183,6 +184,13 @@ FP8_GEMM_RUNNER_BACKEND_CHOICES = [
 ]
 
 MAMBA_SSM_DTYPE_CHOICES = ["float32", "bfloat16"]
+
+MAMBA_SSM_DTYPE_CHOICES = ["float32", "bfloat16", "float16"]
+
+MAMBA_SCHEDULER_STRATEGY_CHOICES = ["auto", "no_buffer", "extra_buffer"]
+
+MAMBA_BACKEND_CHOICES = ["triton", "flashinfer"]
+LINEAR_ATTN_KERNEL_BACKEND_CHOICES = ["triton", "cutedsl"]
 
 
 # Allow external code to add more choices
@@ -401,6 +409,7 @@ class ServerArgs:
     nsa_prefill_backend: str = "flashmla_sparse"
     nsa_decode_backend: str = "fa3"
     enable_flashinfer_autotune: bool = False
+    mamba_backend: str = "triton"
 
     # Speculative decoding
     speculative_algorithm: Optional[str] = None
@@ -458,6 +467,11 @@ class ServerArgs:
     max_mamba_cache_size: Optional[int] = None
     mamba_ssm_dtype: str = "float32"
     mamba_full_memory_ratio: float = 0.9
+    mamba_scheduler_strategy: str = "auto"
+    mamba_track_interval: int = 256
+    linear_attn_backend: str = "triton"
+    linear_attn_decode_backend: Optional[str] = None
+    linear_attn_prefill_backend: Optional[str] = None
 
     # Hierarchical cache
     enable_hierarchical_cache: bool = False
@@ -728,6 +742,10 @@ class ServerArgs:
             self.random_seed = random.randint(0, 1 << 30)
         if self.mm_process_config is None:
             self.mm_process_config = {}
+        if self.mamba_scheduler_strategy == "auto":
+            # TODO: when extra_buffer is more verified, we can set the default path based on
+            #       [overlap, non-overlap]
+            self.mamba_scheduler_strategy = "no_buffer"
 
     def _handle_gpu_memory_settings(self, gpu_mem):
         """
@@ -1293,12 +1311,6 @@ class ServerArgs:
                         f"{model_arch}"
                     )
         elif model_arch in ["Qwen3NextForCausalLM"]:
-            if not self.disable_radix_cache:
-                logger.warning(
-                    "Disabling overlap schedule since MambaRadixCache is not compatible with "
-                    "overlap schedule currently, try to use --disable-radix-cache if overlap schedule is necessary"
-                )
-                self.disable_overlap_schedule = True
             if is_sm100_supported():
                 quantization_config = getattr(hf_config, "quantization_config", None)
                 quant_method = (
@@ -1332,16 +1344,53 @@ class ServerArgs:
                     )
                     self.disable_radix_cache = True
                     self.disable_overlap_schedule = False
+
+            # Mamba radix cache v2
+            if self.enable_mamba_extra_buffer():
+                assert (
+                    is_cuda()
+                ), "Mamba extra_buffer is only supported on CUDA devices with FLA backend"
+                assert (
+                    self.disaggregation_mode == "null"
+                ), "Mamba extra_buffer is not compatible with disaggregation mode yet."
+                if self.speculative_num_draft_tokens is not None:
+                    assert (
+                        self.mamba_track_interval >= self.speculative_num_draft_tokens
+                    ), f"mamba_track_interval {self.mamba_track_interval} must be greater than or equal to speculative_num_draft_tokens {self.speculative_num_draft_tokens}"
+
+                if self.page_size is not None:
+                    assert (
+                        self.mamba_track_interval % self.page_size == 0
+                    ), f"mamba_track_interval {self.mamba_track_interval} must be divisible by page_size {self.page_size}"
+                    assert (
+                        FLA_CHUNK_SIZE % self.page_size == 0
+                    ), f"Page size for hybrid GDN model must be divisible by {FLA_CHUNK_SIZE}, got {self.page_size}"
+
+                if self.speculative_algorithm is not None:
+                    logger.info(
+                        f"Disable overlap schedule for {model_arch} model speculative decoding."
+                    )
+                    self.disable_overlap_schedule = True
+            elif not self.disable_radix_cache:
+                logger.warning(
+                    "Disabling overlap schedule since MambaRadixCache no_buffer is not compatible with "
+                    "overlap schedule currently, try to use --mamba-scheduler-strategy extra_buffer to enable overlap schedule"
+                )
+                self.disable_overlap_schedule = True
+
         elif model_arch in [
             "NemotronHForCausalLM",
             "FalconH1ForCausalLM",
             "JetNemotronForCausalLM",
             "JetVLMForConditionalGeneration",
         ]:
+            assert (
+                not self.enable_mamba_extra_buffer()
+            ), f"mamba extra_buffer is not supported for {model_arch} model"
             if not self.disable_radix_cache:
                 logger.warning(
-                    "Disabling overlap schedule since MambaRadixCache is not compatible with "
-                    "overlap schedule currently, try to use --disable-radix-cache if overlap schedule is necessary"
+                    "Disabling overlap schedule since mamba no_buffer is not compatible with "
+                    "overlap schedule, try to use --disable-radix-cache if overlap schedule is necessary"
                 )
                 self.disable_overlap_schedule = True
 
@@ -3324,6 +3373,52 @@ class ServerArgs:
             default=ServerArgs.mamba_full_memory_ratio,
             help="The ratio of mamba state memory to full kv cache memory.",
         )
+        parser.add_argument(
+            "--mamba-scheduler-strategy",
+            type=str,
+            choices=MAMBA_SCHEDULER_STRATEGY_CHOICES,
+            default=ServerArgs.mamba_scheduler_strategy,
+            help="The strategy to use for mamba radix cache.",
+        )
+        parser.add_argument(
+            "--mamba-track-interval",
+            type=int,
+            default=ServerArgs.mamba_track_interval,
+            help="The interval to track the mamba state during decode.",
+        )
+        parser.add_argument(
+            "--mamba-backend",
+            type=str,
+            choices=MAMBA_BACKEND_CHOICES,
+            default=ServerArgs.mamba_backend,
+            help="Choose the kernel backend for Mamba SSM operations. Default is 'triton'. "
+            "Options: 'triton' (default), 'flashinfer' (requires FlashInfer with Mamba support).",
+        )
+        parser.add_argument(
+            "--linear-attn-backend",
+            type=str,
+            choices=LINEAR_ATTN_KERNEL_BACKEND_CHOICES,
+            default=ServerArgs.linear_attn_backend,
+            help="The default kernel backend for linear attention (GDN/KDA). "
+            "Can be overridden per-mode by --linear-attn-decode-backend "
+            "and --linear-attn-prefill-backend.",
+        )
+        parser.add_argument(
+            "--linear-attn-decode-backend",
+            type=str,
+            choices=LINEAR_ATTN_KERNEL_BACKEND_CHOICES,
+            default=ServerArgs.linear_attn_decode_backend,
+            help="Override the kernel backend for linear attention decode. "
+            "If not set, uses --linear-attn-backend.",
+        )
+        parser.add_argument(
+            "--linear-attn-prefill-backend",
+            type=str,
+            choices=LINEAR_ATTN_KERNEL_BACKEND_CHOICES,
+            default=ServerArgs.linear_attn_prefill_backend,
+            help="Override the kernel backend for linear attention prefill/extend. "
+            "If not set, uses --linear-attn-backend.",
+        )
 
         # Hierarchical cache
         parser.add_argument(
@@ -4102,6 +4197,9 @@ class ServerArgs:
 
         model_config = self.get_model_config()
         return model_config.attention_arch == AttentionArch.MLA
+
+    def enable_mamba_extra_buffer(self) -> bool:
+        return self.mamba_scheduler_strategy == "extra_buffer"
 
     def check_server_args(self):
         # Check parallel size constraints

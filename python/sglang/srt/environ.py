@@ -147,6 +147,23 @@ class Envs:
     SGLANG_LOG_FORWARD_ITERS = EnvBool(False)
     SGLANG_LOG_MS = EnvBool(False)
     SGLANG_DISABLE_REQUEST_LOGGING = EnvBool(False)
+    SGLANG_LOG_REQUEST_EXCEEDED_MS = EnvInt(-1)
+    SGLANG_LOG_REQUEST_HEADERS = EnvTuple(tuple())
+    SGLANG_LOG_SCHEDULER_STATUS_TARGET = EnvStr("")
+    SGLANG_LOG_SCHEDULER_STATUS_INTERVAL = EnvFloat(60.0)
+
+    # SGLang CI
+    SGLANG_IS_IN_CI = EnvBool(False)
+    SGLANG_IS_IN_CI_AMD = EnvBool(False)
+    SGLANG_CUDA_COREDUMP = EnvBool(False)
+    SGLANG_CUDA_COREDUMP_DIR = EnvStr("/tmp/sglang_cuda_coredumps")
+    SGLANG_TEST_MAX_RETRY = EnvInt(None)
+
+    # Constrained Decoding (Grammar)
+    SGLANG_GRAMMAR_POLL_INTERVAL = EnvFloat(0.005)
+    SGLANG_GRAMMAR_MAX_POLL_ITERATIONS = EnvInt(10000)
+    SGLANG_DISABLE_OUTLINES_DISK_CACHE = EnvBool(False)
+
 
     # Test & Debug
     SGLANG_IS_IN_CI = EnvBool(False)
