@@ -65,6 +65,13 @@ _MUTLASS_REPO = _RepoInfo(
     git_shallow=False,
 )
 
+_HADAMARD_REPO = _RepoInfo(
+    name="fast-hadamard-transform",
+    git_repository="https://github.com/sgl-project/fast-hadamard-transform.git",
+    git_tag="48f3c13764dc2ec662ade842a4696a90a137f1bc",
+    git_shallow=False,
+)
+
 
 class _CustomBuildExt(musa_ext.BuildExtension):
     # define a const to set common mapping rules
@@ -84,6 +91,7 @@ class _CustomBuildExt(musa_ext.BuildExtension):
         "#include <c10/cuda/CUDAStream.h>": '#include "torch_musa/csrc/core/MUSAStream.h"',
         "c10::cuda": "c10::musa",
         "C10_CUDA_KERNEL_LAUNCH_CHECK": "C10_MUSA_KERNEL_LAUNCH_CHECK",
+        "C10_CUDA_CHECK": "C10_MUSA_CHECK",
         # CUDA
         "curandStatePhilox4_32_10_t": "murandStatePhilox4_32_10_t",
         "curand_init": "murand_init",
@@ -209,6 +217,13 @@ class _CustomBuildExt(musa_ext.BuildExtension):
                 _FLASHINFER_REPO.git_shallow,
             )
 
+            clone_and_checkout(
+                _HADAMARD_REPO.source_dir,
+                _HADAMARD_REPO.git_repository,
+                _HADAMARD_REPO.git_tag,
+                _HADAMARD_REPO.git_shallow,
+            )
+
         fast_math = """
 static __device__ __forceinline__ float fast_rsqrtf(float a) {
   float x = 0.5f * a;
@@ -257,11 +272,22 @@ static __device__ __forceinline__ float fast_rcp(float a) {
         ).run()
 
         musa_sp.SimplePorting(
+            cuda_dir_path=_HADAMARD_REPO.source_dir / "csrc",
+            mapping_rule={
+                **self._MAPPING_RULE,
+                # csrc/pytorch_extension_utils.h
+                ".is_cuda()": ".is_privateuseone()",
+            },
+        ).run()
+
+        musa_sp.SimplePorting(
             cuda_dir_path="csrc",
             mapping_rule={
                 **self._MAPPING_RULE,
                 # sgl-kernel/csrc/gemm/per_token_group_quant_8bit_v2.cu
                 "SCHEDULER::execute": "SCHEDULER::template execute",
+                # sgl-kernel/csrc/elementwise/topk.cu
+                ".is_cuda()": ".is_privateuseone()",
             },
         ).run()
 
@@ -282,6 +308,7 @@ include_dirs = [
     root / "csrc",
     root / _FLASHINFER_REPO.source_dir / "include_musa",
     root / _FLASHINFER_REPO.source_dir / "csrc_musa",
+    root / _HADAMARD_REPO.source_dir / "csrc_musa",
     root / _MUTLASS_REPO.source_dir / "include",
 ]
 
@@ -292,6 +319,8 @@ sources = [
     "csrc_musa/elementwise/activation.cu",
     "csrc_musa/elementwise/concat_mla.mu",
     "csrc_musa/elementwise/fused_add_rms_norm_kernel.mu",
+    "csrc_musa/elementwise/topk.cu",
+    "csrc_musa/elementwise/pos_enc.cu",
     "csrc_musa/grammar/apply_token_bitmask_inplace_cuda.cu",
     "csrc_musa/moe/moe_align_kernel.cu",
     "csrc_musa/moe/moe_fused_gate_musa.cu",
@@ -320,6 +349,8 @@ sources = [
     str(_FLASHINFER_REPO.source_dir / "csrc_musa/norm.cu"),
     str(_FLASHINFER_REPO.source_dir / "csrc_musa/renorm.cu"),
     str(_FLASHINFER_REPO.source_dir / "csrc_musa/sampling.cu"),
+    str(_HADAMARD_REPO.source_dir / "csrc_musa/fast_hadamard_transform_cuda.cu"),
+    str(_HADAMARD_REPO.source_dir / "csrc_musa/fast_hadamard_transform.cpp"),
     # XXX (MUSA): The following files contain MUSA-specific implementations.
     "csrc_musa/musa/pos_encoding_contiguous.mu",
     "csrc_musa/musa/matmul_mudnn.cpp",
