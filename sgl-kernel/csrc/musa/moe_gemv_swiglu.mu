@@ -183,8 +183,6 @@ using namespace musa::dnn;
                     RUN_ROUNTE_WEIGHT(bfloat16_t, bfloat16_t, float, CAL_MOE_GEMV) \
                 } else if (A.scalar_type() == at::ScalarType::Half) { \
                     RUN_ROUNTE_WEIGHT(float16_t, float16_t, float, CAL_MOE_GEMV) \
-                } else if (A.scalar_type() == at::ScalarType::Float) { \
-                    RUN_ROUNTE_WEIGHT(float, float16_t, float, CAL_MOE_GEMV) \
                 } \
             } \
             printf("no support on moe gemv\n"); \
