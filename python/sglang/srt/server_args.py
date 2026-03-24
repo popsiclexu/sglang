@@ -29,7 +29,6 @@ import orjson
 from sglang.srt.connector import ConnectorType
 from sglang.srt.environ import ToolStrictLevel, envs
 from sglang.srt.function_call.function_call_parser import FunctionCallParser
-from sglang.srt.layers.attention.fla.chunk_delta_h import CHUNK_SIZE as FLA_CHUNK_SIZE
 from sglang.srt.lora.lora_registry import LoRARef
 from sglang.srt.parser.reasoning_parser import ReasoningParser
 from sglang.srt.utils.common import (
@@ -1344,55 +1343,12 @@ class ServerArgs:
                     )
                     self.disable_radix_cache = True
                     self.disable_overlap_schedule = False
-
-            # Mamba radix cache v2
-            if self.enable_mamba_extra_buffer():
-                assert (
-                    is_cuda()
-                ), "Mamba extra_buffer is only supported on CUDA devices with FLA backend"
-                assert (
-                    self.disaggregation_mode == "null"
-                ), "Mamba extra_buffer is not compatible with disaggregation mode yet."
-                if self.speculative_num_draft_tokens is not None:
-                    assert (
-                        self.mamba_track_interval >= self.speculative_num_draft_tokens
-                    ), f"mamba_track_interval {self.mamba_track_interval} must be greater than or equal to speculative_num_draft_tokens {self.speculative_num_draft_tokens}"
-
-                if self.page_size is not None:
-                    assert (
-                        self.mamba_track_interval % self.page_size == 0
-                    ), f"mamba_track_interval {self.mamba_track_interval} must be divisible by page_size {self.page_size}"
-                    assert (
-                        FLA_CHUNK_SIZE % self.page_size == 0
-                    ), f"Page size for hybrid GDN model must be divisible by {FLA_CHUNK_SIZE}, got {self.page_size}"
-
-                if self.speculative_algorithm is not None:
-                    logger.info(
-                        f"Disable overlap schedule for {model_arch} model speculative decoding."
+            else:
+                if not self.disable_radix_cache:
+                    raise ValueError(
+                        f"Speculative decoding for {model_arch} is not compatible with radix cache when using --mamba-scheduler-strategy no_buffer."
+                        "To use radix cache with speculative decoding, please use --mamba-scheduler-strategy extra_buffer and set SGLANG_ENABLE_SPEC_V2=1."
                     )
-                    self.disable_overlap_schedule = True
-            elif not self.disable_radix_cache:
-                logger.warning(
-                    "Disabling overlap schedule since MambaRadixCache no_buffer is not compatible with "
-                    "overlap schedule currently, try to use --mamba-scheduler-strategy extra_buffer to enable overlap schedule"
-                )
-                self.disable_overlap_schedule = True
-
-        elif model_arch in [
-            "NemotronHForCausalLM",
-            "FalconH1ForCausalLM",
-            "JetNemotronForCausalLM",
-            "JetVLMForConditionalGeneration",
-        ]:
-            assert (
-                not self.enable_mamba_extra_buffer()
-            ), f"mamba extra_buffer is not supported for {model_arch} model"
-            if not self.disable_radix_cache:
-                logger.warning(
-                    "Disabling overlap schedule since mamba no_buffer is not compatible with "
-                    "overlap schedule, try to use --disable-radix-cache if overlap schedule is necessary"
-                )
-                self.disable_overlap_schedule = True
 
     def _handle_sampling_backend(self):
         if self.sampling_backend is None:
