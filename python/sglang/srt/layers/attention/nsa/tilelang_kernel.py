@@ -204,12 +204,12 @@ def fp8_index(
         tilelang.PassConfigKey.TL_DISABLE_TMA_LOWER: True,
         tilelang.PassConfigKey.TL_DISABLE_WARP_SPECIALIZED: True,
         tilelang.PassConfigKey.TL_ENABLE_FAST_MATH: True,
-        #tilelang.PassConfigKey.TL_DISABLE_THREAD_STORAGE_SYNC: True,
-        #tilelang.PassConfigKey.TL_ENABLE_MUSA_BURST: True,
+        # tilelang.PassConfigKey.TL_DISABLE_THREAD_STORAGE_SYNC: True,
+        # tilelang.PassConfigKey.TL_ENABLE_MUSA_BURST: True,
         tilelang.PassConfigKey.TL_ENABLE_REDUCE_BURST: False,
     },
     compile_flags=[
-        #"-Od3",
+        # "-Od3",
         "-fmusa-flush-denormals-to-zero",
         "-mllvm",
         "-misched=mtgpu-max-ilp",
@@ -231,7 +231,8 @@ def fp8_index(
         "-mtgpu-load-cluster-mutation=1",
         "-mllvm",
         "--num-dwords-of-load-in-mutation=64",
-    ])
+    ],
+)
 def sparse_attention_fwd_kernel_v1(
     num_heads,
     dim,
@@ -339,14 +340,16 @@ def sparse_attention_fwd_kernel_v1(
 
                 T.annotate_layout(
                     {
-                        KV_shared:
-                            tilelang.layout.make_sqmma_swizzled_layout(KV_shared, k_major=True)
+                        KV_shared: tilelang.layout.make_sqmma_swizzled_layout(
+                            KV_shared, k_major=True
+                        )
                     },
                     allow_reannotation=True,
                 )
                 for bi_i, d_i in T.Parallel(BI, D):
                     KV_shared[bi_i, d_i] = KV[
-                        b_i, Indices[b_i, s_i, g_i, i_i * BI + bi_i], g_i, d_i]
+                        b_i, Indices[b_i, s_i, g_i, i_i * BI + bi_i], g_i, d_i
+                    ]
                 for bi_i, d_i in T.Parallel(BI, D_tail):
                     K_tail_shared[bi_i, d_i] = KV[
                         b_i, Indices[b_i, s_i, g_i, i_i * BI + bi_i], g_i, D + d_i
@@ -387,9 +390,9 @@ def sparse_attention_fwd_kernel_v1(
                 T.copy(acc_s, S_shared)
                 T.annotate_layout(
                     {
-                        KV_shared:
-                            tilelang.layout.make_sqmma_swizzled_layout(
-                                KV_shared, continuity=64, k_major=False)
+                        KV_shared: tilelang.layout.make_sqmma_swizzled_layout(
+                            KV_shared, continuity=64, k_major=False
+                        )
                     },
                     allow_reannotation=True,
                 )

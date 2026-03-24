@@ -412,10 +412,12 @@ class LogitsProcessor(nn.Module):
             or logits_metadata.forward_mode.is_draft_extend_v2()
         ):
             pruned_states = hidden_states
+            pruned_states_before_norm = hidden_states_before_norm
             if aux_hidden_states is not None:
                 aux_pruned_states = [hidden for hidden in aux_hidden_states]
             sample_indices = None
             input_logprob_indices = None
+
         elif (
             logits_metadata.forward_mode.is_extend()
             and not logits_metadata.extend_return_logprob
@@ -437,6 +439,8 @@ class LogitsProcessor(nn.Module):
                     - 1
                 )
             pruned_states = hidden_states[last_index]
+            if hidden_states_before_norm is not None:
+                pruned_states_before_norm = hidden_states_before_norm[last_index]
             if aux_hidden_states is not None:
                 aux_pruned_states = [hidden[last_index] for hidden in aux_hidden_states]
             sample_indices = None
@@ -487,7 +491,13 @@ class LogitsProcessor(nn.Module):
                 # We always need at least 1 token to sample because that's required
                 # by a caller.
                 assert extend_len > start_len
-                pruned_states.append(hidden_states[pt + start_len : pt + extend_len])
+                pruned_states_list.append(
+                    hidden_states[pt + start_len : pt + extend_len]
+                )
+                if hidden_states_before_norm is not None:
+                    pruned_states_before_norm_list.append(
+                        hidden_states_before_norm[pt + start_len : pt + extend_len]
+                    )
                 # Map each token to its sequence index, for chunked computation
                 # of input logprobs
                 token_to_seq_idx.extend([idx] * (extend_len - start_len))
@@ -504,7 +514,9 @@ class LogitsProcessor(nn.Module):
 
             # Set the last token of the last sequence
             token_to_seq_idx.append(len(logits_metadata.extend_seq_lens_cpu) - 1)
-            pruned_states = torch.cat(pruned_states)
+            pruned_states = torch.cat(pruned_states_list)
+            if hidden_states_before_norm is not None:
+                pruned_states_before_norm = torch.cat(pruned_states_before_norm_list)
             sample_indices = torch.tensor(
                 sample_indices, device=pruned_states.device, dtype=torch.int64
             )

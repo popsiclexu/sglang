@@ -903,9 +903,11 @@ class FlashAttentionBackend(AttentionBackend):
                 cache_seqlens = metadata.encoder_lens_int32
                 cu_seqlens_k = metadata.encoder_cu_seqlens_k
                 window_size = (-1, -1)
-            
-            has_extend_prefix = forward_batch.extend_prefix_lens_cpu is not None and any(
-                forward_batch.extend_prefix_lens_cpu)
+
+            has_extend_prefix = (
+                forward_batch.extend_prefix_lens_cpu is not None
+                and any(forward_batch.extend_prefix_lens_cpu)
+            )
 
             if (
                 not _is_musa

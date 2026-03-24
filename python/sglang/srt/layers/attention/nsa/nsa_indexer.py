@@ -396,7 +396,7 @@ class Indexer(CustomOp):
                 (extend_seq_len,),
                 k_offset,
                 dtype=torch.int32,
-                device="cuda" if not _is_musa else "musa"
+                device="cuda" if not _is_musa else "musa",
             )
             ke = ks + seq_lens_expanded[q_offset : q_offset + extend_seq_len]
             k_fp8_list.append(k_fp8)
