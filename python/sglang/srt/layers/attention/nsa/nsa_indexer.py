@@ -19,13 +19,6 @@ if _is_cuda or _is_musa:
     except ImportError as e:
         deep_gemm = e
 
-if is_musa():
-    from mate.deep_gemm import (
-        fp8_mqa_logits,
-        fp8_paged_mqa_logits,
-        get_paged_mqa_logits_metadata,
-    )
-
 from sglang.srt.layers import deep_gemm_wrapper
 from sglang.srt.layers.attention.nsa.utils import (
     NSA_DUAL_STREAM,
@@ -131,11 +124,9 @@ class Indexer(CustomOp):
         else:
             self.cp_size = None
             self.cp_rank = None
-        if is_cuda():
+        if is_cuda() or is_musa():
             self.sm_count = deep_gemm.get_num_sms()
             self.half_device_sm_count = ceil_align(self.sm_count // 2, 8)
-        elif is_musa():
-            self.sm_count = 0
 
         self.wq_b = ReplicatedLinear(
             self.q_lora_rank,
@@ -174,7 +165,7 @@ class Indexer(CustomOp):
         self.scale_fmt = scale_fmt
         self.softmax_scale = self.head_dim**-0.5
 
-    # @torch.compile(dynamic=True)
+    @torch.compile(dynamic=True, disable=_is_musa)
     def _get_logits_head_gate(self, x: torch.Tensor, q_scale: torch.Tensor):
         weights, _ = self.weights_proj(x.float())
         weights = weights * self.n_heads**-0.5
@@ -306,7 +297,7 @@ class Indexer(CustomOp):
         else:
             seqlens_32 = metadata.get_seqlens_int32()
         # NOTE(dark): 132 is SM count on H200/B200, not magic number
-        schedule_metadata = get_paged_mqa_logits_metadata(
+        schedule_metadata = deep_gemm.get_paged_mqa_logits_metadata(
             seqlens_32, blocksize, self.sm_count
         )
 
@@ -322,7 +313,7 @@ class Indexer(CustomOp):
         assert len(weights.shape) == 3
         weights = weights.squeeze(2)
 
-        logits = fp8_paged_mqa_logits(
+        logits = deep_gemm.fp8_paged_mqa_logits(
             q_fp8,
             kv_cache_fp8,
             weights,
@@ -402,7 +393,10 @@ class Indexer(CustomOp):
             )
             extend_seq_len = forward_batch.extend_seq_lens_cpu[i]
             ks = torch.full(
-                (extend_seq_len,), k_offset, dtype=torch.int32, device="musa"
+                (extend_seq_len,),
+                k_offset,
+                dtype=torch.int32,
+                device="cuda" if not _is_musa else "musa"
             )
             ke = ks + seq_lens_expanded[q_offset : q_offset + extend_seq_len]
             k_fp8_list.append(k_fp8)
@@ -441,7 +435,7 @@ class Indexer(CustomOp):
         need_chunk, free_mem = self._should_chunk_mqa_logits(q_offset, k_offset, device)
 
         if not need_chunk:
-            logits = fp8_mqa_logits(
+            logits = deep_gemm.fp8_mqa_logits(
                 q_fp8[:q_offset],
                 kv_fp8,
                 weights[:q_offset],
@@ -494,7 +488,7 @@ class Indexer(CustomOp):
         while start < q_offset:
             end = min(start + max_rows, q_offset)
 
-            logits_chunk = fp8_mqa_logits(
+            logits_chunk = deep_gemm.fp8_mqa_logits(
                 q_fp8[start:end],
                 kv_fp8,
                 weights[start:end],
@@ -749,7 +743,7 @@ class Indexer(CustomOp):
             forward_batch.req_pool_indices, :
         ]
         strided_indices = torch.arange(
-            0, block_tables.shape[-1], page_size, device="musa"
+            0, block_tables.shape[-1], page_size, device="cuda"
         )
         block_tables = block_tables[:, strided_indices] // page_size
 
@@ -802,11 +796,7 @@ class Indexer(CustomOp):
 
             q_len_start = q_len_end
 
-        # NOTICE(MUSA): why topk_indices_list is empty?? I've no idea.
-        if len(topk_indices_list) == 0:
-            topk_indices = torch.zeros((max(1, forward_batch.batch_size),topk), dtype=torch.int64, device=q_fp8.device)
-        else:
-            topk_indices = torch.cat(topk_indices_list, dim=0)
+        topk_indices = torch.cat(topk_indices_list, dim=0)
         return topk_indices
 
     def forward_cuda(
@@ -905,7 +895,10 @@ class Indexer(CustomOp):
                 #         "HACK: seq_lens empty but x not empty, hackily return all-invalid topk_result"
                 #     )
                 return torch.full(
-                    (x.shape[0], self.index_topk), -1, dtype=torch.int, device="musa"
+                    (x.shape[0], self.index_topk),
+                    -1,
+                    dtype=torch.int,
+                    device="cuda" if not _is_musa else "musa",
                 )
 
             if (

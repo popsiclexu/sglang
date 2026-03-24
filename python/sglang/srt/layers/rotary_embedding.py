@@ -971,7 +971,7 @@ class DeepseekScalingRotaryEmbedding(RotaryEmbedding):
         else:
             return self.forward_native(positions, query, key, offsets)
 
-    # @torch.compile(dynamic=True, backend=get_compiler_backend())
+    @torch.compile(dynamic=True, backend=get_compiler_backend(), disable=_is_musa)
     def forward_musa(
         self,
         positions: torch.Tensor,
@@ -989,7 +989,6 @@ class DeepseekScalingRotaryEmbedding(RotaryEmbedding):
             self.is_neox_style,
         )
         return query, key
-        # return self.forward_native(positions, query, key, offsets)
 
 
 class Llama3RotaryEmbedding(RotaryEmbedding):
