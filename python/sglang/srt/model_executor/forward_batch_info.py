@@ -696,7 +696,7 @@ class ForwardBatch:
                         mm_input, self.seq_lens[batch_idx], model_runner.device
                     )
                     mrope_positions_list[batch_idx] = mrope_positions
-            elif self.forward_mode.is_extend():
+            elif self.forward_mode.is_extend(include_draft_extend_v2=True):
                 extend_seq_len, extend_prefix_len = (
                     batch.extend_seq_lens[batch_idx],
                     batch.extend_prefix_lens[batch_idx],
@@ -844,7 +844,10 @@ class ForwardBatch:
                 self.extend_logprob_start_lens_cpu = self.extend_prefix_lens_cpu
             else:
                 setattr(self, "_original_batch_size", self.batch_size)
-                if self.spec_info is not None and self.spec_info.num_tokens_per_batch != 0:
+                if (
+                    self.spec_info is not None
+                    and self.spec_info.num_tokens_per_batch != 0
+                ):
                     bs = self.batch_size = (
                         num_tokens // self.spec_info.num_tokens_per_batch
                     )

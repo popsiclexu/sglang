@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import requests
 
+from sglang.srt.environ import envs
 from sglang.srt.utils import kill_process_tree
 from sglang.test.few_shot_gsm8k import run_eval
 from sglang.test.kl_test_utils import (
@@ -150,6 +151,7 @@ class TestQwen3NextMTP(CustomTestCase):
                 "2048",
                 "--mamba-scheduler-strategy",
                 "no_buffer",
+                "--disable-radix-cache",
             ],
         )
 
@@ -290,22 +292,29 @@ class TestQwen3NextMTPTopk(CustomTestCase):
         print("test_prefix_cache_branching passed")
 
 
-class TestQwen3NextPiecewiseCudaGraph(CustomTestCase):
-
+class TestQwen3NextMTPV2(CustomTestCase):
     @classmethod
     def setUpClass(cls):
         cls.model = QWEN3_NEXT_MODEL
+        envs.SGLANG_ENABLE_SPEC_V2.set(True)
         cls.base_url = DEFAULT_URL_FOR_TEST
         cls.process = popen_launch_server(
             cls.model,
             cls.base_url,
             timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
             other_args=[
+                "--trust-remote-code",
+                "4",
+                "--mem-fraction-static",
+                "0.8",
                 "--tp",
                 "4",
-                "--enable-piecewise-cuda-graph",
-                "--piecewise-cuda-graph-compiler",
-                "eager",
+                "--chunked-prefill-size",
+                "2048",
+                "--mamba-scheduler-strategy",
+                "extra_buffer",
+                "--mamba-track-interval",
+                "128",
             ],
         )
 
@@ -328,6 +337,34 @@ class TestQwen3NextPiecewiseCudaGraph(CustomTestCase):
         self.assertGreaterEqual(
             metrics["accuracy"], ACC_THRESHOLDS[self.model]["gsm8k"]
         )
+
+    # TODO(hzh): After merging the PR that fixes specv2 to correctly return log probs, re-open the tests below. https://github.com/sgl-project/sglang/pull/18645
+    # def test_input_output_logprobs_match(self):
+    #     test_input_output_logprobs_match_helper(
+    #         self.base_url,
+    #         ACC_THRESHOLDS,
+    #         self.model,
+    #         max_samples=32,
+    #         max_new_tokens=512,
+    #     )
+
+    # def test_input_output_logprobs_match_prefill_cache_hit(self):
+    #     test_input_output_logprobs_match_prefill_cache_hit_helper(
+    #         self.base_url,
+    #         ACC_THRESHOLDS,
+    #         self.model,
+    #         max_samples=32,
+    #         max_new_tokens=512,
+    #     )
+
+    # def test_input_output_logprobs_match_decode_cache_hit(self):
+    #     test_input_output_logprobs_match_decode_cache_hit_helper(
+    #         self.base_url,
+    #         ACC_THRESHOLDS,
+    #         self.model,
+    #         max_samples=32,
+    #         max_new_tokens=512,
+    #     )
 
 
 if __name__ == "__main__":
