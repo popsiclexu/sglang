@@ -613,6 +613,12 @@ class VisionAttention(nn.Module):
                 backend = "aiter_attn"
             else:
                 backend = "triton_attn"
+        elif _is_musa:
+            major, minor = get_device_capability()
+            if major == 3:
+                backend = "fa3"
+            else:
+                backend = "triton_attn"
         else:
             backend = "sdpa"
         if backend == "fa3" and is_blackwell():

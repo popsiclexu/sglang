@@ -16,6 +16,7 @@ s: scale, 1 item per token, fp32
 
 _is_musa = is_musa()
 
+
 class GetK:
     @classmethod
     def execute(cls, *args, **kwargs):
@@ -63,7 +64,9 @@ class GetK:
 
         # flat_indices: (num_pages, num_k_bytes_per_page), int32, element := an index into flat_buf that we want to access
         flat_indices = (page_indices * buf_numel_per_page)[:, None] + torch.arange(
-            num_k_bytes_per_page, dtype=torch.int32, device="cuda" if not _is_musa else "musa"
+            num_k_bytes_per_page,
+            dtype=torch.int32,
+            device="cuda" if not _is_musa else "musa",
         )[None, :]
         flat_indices = flat_indices.flatten()[: seq_len * num_k_bytes_per_token]
 
@@ -129,9 +132,11 @@ class GetS:
         flat_buf = buf.flatten()
         flat_indices = (
             (page_indices * buf_numel_per_page)[:, None]
-            + torch.arange(num_s_bytes_per_page, dtype=torch.int32, device="cuda" if not _is_musa else "musa")[
-                None, :
-            ]
+            + torch.arange(
+                num_s_bytes_per_page,
+                dtype=torch.int32,
+                device="cuda" if not _is_musa else "musa",
+            )[None, :]
             + s_offset_in_page
         )
         flat_indices = flat_indices.flatten()[: seq_len * num_s_bytes_per_token]
@@ -223,9 +228,11 @@ class SetK:
         flat_indices = (
             (loc_page_index * buf_numel_per_page)[:, None]
             + (loc_token_offset_in_page * num_k_bytes_per_token)[:, None]
-            + torch.arange(num_k_bytes_per_token, dtype=torch.int32, device="cuda" if not _is_musa else "musa")[
-                None, :
-            ]
+            + torch.arange(
+                num_k_bytes_per_token,
+                dtype=torch.int32,
+                device="cuda" if not _is_musa else "musa",
+            )[None, :]
         )
         num_k_bytes_total = num_tokens_to_write * num_k_bytes_per_token
         flat_indices = flat_indices.flatten()[:num_k_bytes_total]
@@ -275,9 +282,11 @@ class SetS:
             (loc_page_index * buf_numel_per_page)[:, None]
             + s_offset_in_page
             + (loc_token_offset_in_page * num_s_bytes_per_token)[:, None]
-            + torch.arange(num_s_bytes_per_token, dtype=torch.int32, device="cuda" if not _is_musa else "musa")[
-                None, :
-            ]
+            + torch.arange(
+                num_s_bytes_per_token,
+                dtype=torch.int32,
+                device="cuda" if not _is_musa else "musa",
+            )[None, :]
         )
         number_s_bytes_total = num_tokens_to_write * num_s_bytes_per_token
         flat_indices = flat_indices.flatten()[:number_s_bytes_total]
