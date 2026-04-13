@@ -1472,7 +1472,7 @@ def get_amdgpu_memory_capacity():
 
 
 def get_device_sm():
-    if torch.cuda.is_available():
+    if torch.cuda.is_available() or is_musa():
         major, minor = torch.cuda.get_device_capability()
         return major * 10 + minor
     return 0

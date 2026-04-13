@@ -27,6 +27,7 @@ from sglang.srt.layers.moe.utils import (
 )
 from sglang.srt.utils import (
     get_bool_env_var,
+    get_device,
     is_blackwell,
     is_hip,
     is_npu,
@@ -205,7 +206,7 @@ class DeepEPBuffer:
 
         if not _is_npu:
             total_num_sms = torch.cuda.get_device_properties(
-                device="cuda"
+                device=get_device()
             ).multi_processor_count
             if (
                 (deepep_mode != DeepEPMode.LOW_LATENCY)

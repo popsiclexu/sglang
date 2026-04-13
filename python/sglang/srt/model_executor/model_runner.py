@@ -166,6 +166,7 @@ from sglang.srt.utils import (
     enable_show_time_cost,
     get_available_gpu_memory,
     get_cpu_ids_by_node,
+    get_device,
     init_custom_process_group,
     is_hip,
     is_host_cpu_arm64,
@@ -2048,7 +2049,7 @@ class ModelRunner(ModelRunnerKVCacheMixin):
     def init_cublas(self):
         """We need to run a small matmul to init cublas. Otherwise, it will raise some errors later."""
         dtype = torch.float16
-        device = "cuda"
+        device = get_device()
         a = torch.ones((16, 16), dtype=dtype, device=device)
         b = torch.ones((16, 16), dtype=dtype, device=device)
         c = a @ b

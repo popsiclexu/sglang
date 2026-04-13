@@ -517,7 +517,7 @@ def sglang_per_token_group_quant_fp8(
     if x.shape[0] > 0:
         # Temporary
         if enable_sgl_per_token_group_quant_8bit:
-            if enable_v2:
+            if enable_v2 or _is_musa:
                 sgl_per_token_group_quant_8bit(
                     x,
                     x_q,
