@@ -19,7 +19,14 @@ from sglang.srt.layers.moe.moe_runner.base import (
     register_pre_permute,
 )
 from sglang.srt.layers.moe.utils import MoeRunnerBackend
-from sglang.srt.utils import cpu_has_amx_support, is_cpu, is_cuda, is_hip, is_xpu
+from sglang.srt.utils import (
+    cpu_has_amx_support,
+    is_cpu,
+    is_cuda,
+    is_hip,
+    is_musa,
+    is_xpu,
+)
 
 if TYPE_CHECKING:
     from sglang.srt.layers.moe.token_dispatcher.standard import (
@@ -35,6 +42,7 @@ _is_cpu = is_cpu()
 _use_aiter = bool(int(os.getenv("SGLANG_USE_AITER", "0")))
 _is_xpu = is_xpu()
 _MOE_PADDING_SIZE = 128 if bool(int(os.getenv("SGLANG_MOE_PADDING", "0"))) else 0
+_is_musa = is_musa()
 
 
 if _is_cuda or _is_hip:
@@ -61,6 +69,8 @@ elif _is_cpu and _is_cpu_amx_available:
     pass
 elif _is_xpu:
     from sgl_kernel import moe_sum_reduce, silu_and_mul
+elif _is_musa:
+    from sglang.srt.layers.activation import GeluAndMul, SiluAndMul
 
 
 if _is_cuda or _is_hip or _is_xpu:
@@ -212,11 +222,17 @@ class TritonRunnerCore(MoeRunnerCore):
                 hidden_states, intermediate_cache1, topk_weights, topk_ids
             )
 
-        intermediate_cache2 = torch.empty(
-            (M * topk_ids.shape[1], N // 2),
-            device=hidden_states.device,
-            dtype=hidden_states.dtype,
-        )
+        if hooks and hooks.after_gate_up:
+            hooks.after_gate_up(
+                hidden_states, intermediate_cache1, topk_weights, topk_ids
+            )
+
+        if not _is_musa:
+            intermediate_cache2 = torch.empty(
+                (M * topk_ids.shape[1], N // 2),
+                device=hidden_states.device,
+                dtype=hidden_states.dtype,
+            )
 
         if activation == "silu":
             if gemm1_alpha is not None:
@@ -230,6 +246,8 @@ class TritonRunnerCore(MoeRunnerCore):
                 )
             elif _is_cuda or _is_hip or _is_xpu:
                 silu_and_mul(intermediate_cache1.view(-1, N), intermediate_cache2)
+            elif _is_musa:
+                intermediate_cache2 = SiluAndMul()(intermediate_cache1.view(-1, N))
             else:
                 vllm_ops.silu_and_mul(
                     intermediate_cache2, intermediate_cache1.view(-1, N)
@@ -239,6 +257,8 @@ class TritonRunnerCore(MoeRunnerCore):
             assert gemm1_limit is None, "gemm1_limit is not supported for gelu"
             if _is_cuda or _is_hip:
                 gelu_and_mul(intermediate_cache1.view(-1, N), intermediate_cache2)
+            elif _is_musa:
+                intermediate_cache2 = GeluAndMul()(intermediate_cache1.view(-1, N))
             else:
                 vllm_ops.gelu_and_mul(
                     intermediate_cache2, intermediate_cache1.view(-1, N)
