@@ -56,7 +56,7 @@ def cache_once(fn):
 
 @cache_once
 def is_arch_support_pdl() -> bool:
-    if bool(torch.version.hip):
+    if bool(torch.version.hip) or bool(torch.version.musa):
         return False
     try:
         device = torch.cuda.current_device()
